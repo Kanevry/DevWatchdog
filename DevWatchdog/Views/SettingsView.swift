@@ -46,62 +46,62 @@ struct SettingsView: View {
             }
 
             Section("Scan Settings") {
-                HStack {
-                    Text("Scan interval:")
-                    Slider(value: $config.scanInterval, in: 10...120, step: 5) {
-                        Text("Scan interval")
+                LabeledContent("Scan interval") {
+                    HStack {
+                        Slider(value: $config.scanInterval, in: 10...120, step: 5)
+                            .frame(maxWidth: 200)
+                        Text("\(Int(config.scanInterval))s")
+                            .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
                     }
-                    Text("\(Int(config.scanInterval))s")
-                        .monospacedDigit()
-                        .frame(width: 40, alignment: .trailing)
                 }
 
                 if config.killMode == .smart {
-                    HStack {
-                        Text("Grace period:")
-                        Slider(value: $config.gracePeriod, in: 10...120, step: 5) {
-                            Text("Grace period")
+                    LabeledContent("Grace period") {
+                        HStack {
+                            Slider(value: $config.gracePeriod, in: 10...120, step: 5)
+                                .frame(maxWidth: 200)
+                            Text("\(Int(config.gracePeriod))s")
+                                .monospacedDigit()
+                                .frame(width: 40, alignment: .trailing)
                         }
-                        Text("\(Int(config.gracePeriod))s")
-                            .monospacedDigit()
-                            .frame(width: 40, alignment: .trailing)
                     }
                 }
             }
 
             Section("Thresholds (for processes without specific rules)") {
-                HStack {
-                    Text("CPU threshold:")
-                    Slider(value: $config.cpuThreshold, in: 10...200, step: 10) {
-                        Text("CPU threshold")
+                LabeledContent("CPU threshold") {
+                    HStack {
+                        Slider(value: $config.cpuThreshold, in: 10...200, step: 10)
+                            .frame(maxWidth: 200)
+                        Text("\(Int(config.cpuThreshold))%")
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
                     }
-                    Text("\(Int(config.cpuThreshold))%")
-                        .monospacedDigit()
-                        .frame(width: 50, alignment: .trailing)
                 }
 
-                HStack {
-                    Text("Runtime threshold:")
-                    Slider(value: $config.runtimeThreshold, in: 60...7200, step: 60) {
-                        Text("Runtime threshold")
+                LabeledContent("Runtime threshold") {
+                    HStack {
+                        Slider(value: $config.runtimeThreshold, in: 60...7200, step: 60)
+                            .frame(maxWidth: 200)
+                        Text(formatDuration(config.runtimeThreshold))
+                            .monospacedDigit()
+                            .frame(width: 50, alignment: .trailing)
                     }
-                    Text(formatDuration(config.runtimeThreshold))
-                        .monospacedDigit()
-                        .frame(width: 50, alignment: .trailing)
                 }
             }
 
             Section("Notifications") {
                 Toggle("Sound on critical CPU load", isOn: $config.soundOnCritical)
                 if config.soundOnCritical {
-                    HStack {
-                        Text("Critical threshold:")
-                        Slider(value: $config.criticalCPUThreshold, in: 100...2000, step: 50) {
-                            Text("Critical CPU")
+                    LabeledContent("Critical threshold") {
+                        HStack {
+                            Slider(value: $config.criticalCPUThreshold, in: 100...2000, step: 50)
+                                .frame(maxWidth: 200)
+                            Text("\(Int(config.criticalCPUThreshold))%")
+                                .monospacedDigit()
+                                .frame(width: 60, alignment: .trailing)
                         }
-                        Text("\(Int(config.criticalCPUThreshold))%")
-                            .monospacedDigit()
-                            .frame(width: 60, alignment: .trailing)
                     }
                 }
             }

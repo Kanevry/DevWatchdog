@@ -5,7 +5,7 @@
 **DevWatchdog** is a lightweight macOS menu bar app that monitors and automatically kills zombie development processes (Vitest workers, Jest, tsc, esbuild, webpack) that keep running after their parent crashes or exits.
 
 <p align="center">
-  <img src="docs/screenshot-menu.png" alt="DevWatchdog Menu Bar" width="380" />
+  <img src="docs/screenshot-menu.png" alt="DevWatchdog Menu Bar" width="400" />
 </p>
 
 ## The Problem
@@ -56,6 +56,17 @@ Seven Vitest fork workers at 100% CPU each. For two hours. The parent process cr
 - Shows PID, CPU%, memory, runtime, project name, and orphan status
 
 ### Fully Configurable
+
+<p align="center">
+  <img src="docs/screenshot-settings-top.png" alt="DevWatchdog Settings - General" width="380" />
+  <img src="docs/screenshot-rules.png" alt="DevWatchdog Settings - Rules" width="380" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshot-settings-bottom.png" alt="DevWatchdog Settings - Thresholds" width="380" />
+  <img src="docs/screenshot-about.png" alt="DevWatchdog Settings - About" width="380" />
+</p>
+
 - Custom process rules with glob patterns (e.g., `vitest.*forks`)
 - Per-rule CPU threshold, runtime threshold, and action (auto-kill / warn / ignore / whitelist)
 - Scan interval (10-120 seconds)
