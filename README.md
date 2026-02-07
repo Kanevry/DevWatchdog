@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/app-icon.png" alt="DevWatchdog Logo" width="128" />
+</p>
+
 # DevWatchdog
 
 > Your Mac shouldn't be a space heater because of zombie Node.js processes.
