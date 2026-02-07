@@ -225,7 +225,7 @@ struct SettingsView: View {
 
     private var aboutTab: some View {
         VStack(spacing: 16) {
-            Image(nsImage: NSApp.applicationIconImage)
+            appIcon
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 96, height: 96)
@@ -256,6 +256,16 @@ struct SettingsView: View {
     }
 
     // MARK: - Helpers
+
+    /// Load app icon directly from bundle (NSApp.applicationIconImage doesn't work for LSUIElement apps)
+    private var appIcon: Image {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let nsImage = NSImage(contentsOf: url) {
+            return Image(nsImage: nsImage)
+        }
+        // Fallback to NSApp icon
+        return Image(nsImage: NSApp.applicationIconImage)
+    }
 
     private func formatDuration(_ seconds: TimeInterval) -> String {
         let mins = Int(seconds) / 60
