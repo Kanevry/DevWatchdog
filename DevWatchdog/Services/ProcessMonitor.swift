@@ -22,7 +22,7 @@ class ProcessMonitor: ObservableObject {
 
     func start(config: WatchdogConfig) {
         self.config = config
-        notificationService.requestPermission()
+        Task { await notificationService.requestPermission() }
         scheduleTimer()
 
         // Initial scan
