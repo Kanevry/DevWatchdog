@@ -225,9 +225,10 @@ struct SettingsView: View {
 
     private var aboutTab: some View {
         VStack(spacing: 16) {
-            Image(systemName: "shield.checkered")
-                .font(.system(size: 48))
-                .foregroundStyle(.blue)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 96, height: 96)
 
             Text("DevWatchdog")
                 .font(.title)
