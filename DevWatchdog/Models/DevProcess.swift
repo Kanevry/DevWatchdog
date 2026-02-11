@@ -62,6 +62,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
             }
             return "jest"
         }
+        if cmd.contains("tsgo") {
+            return "tsgo"
+        }
         if cmd.contains("tsc") || cmd.contains("typescript") {
             return "tsc"
         }
@@ -71,11 +74,26 @@ struct DevProcess: Identifiable, Hashable, Sendable {
             }
             return "esbuild"
         }
+        if cmd.contains("next") && cmd.contains("build") {
+            return "next build"
+        }
         if cmd.contains("next") && cmd.contains("dev") {
             return "next dev"
         }
         if cmd.contains("next") {
             return "next.js"
+        }
+        if cmd.contains("ms-playwright") || cmd.contains("playwright") {
+            if cmd.contains("chromium") { return "Chromium (Playwright)" }
+            if cmd.contains("firefox") { return "Firefox (Playwright)" }
+            if cmd.contains("webkit") { return "WebKit (Playwright)" }
+            return "Playwright"
+        }
+        if cmd.contains("percy") {
+            return "Percy"
+        }
+        if cmd.contains("react-email") {
+            return "react-email"
         }
         if cmd.contains("mcp") {
             return "MCP server"
@@ -114,9 +132,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         return String(projectPart)
     }
 
-    // Severity for sorting
+    // Severity for sorting — orphan is the primary signal
     var severity: Int {
-        if isOrphan && cpuPercent > 80 { return 3 }
+        if isOrphan { return 3 }
         if cpuPercent > 80 { return 2 }
         if cpuPercent > 50 { return 1 }
         return 0

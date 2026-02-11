@@ -45,7 +45,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A10000000000000000000006 /* Root */ = {
+		A10000000000000000000006 = {
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000003 /* DevWatchdog */,
@@ -108,7 +108,7 @@
 				en,
 				Base,
 			);
-			mainGroup = A10000000000000000000006 /* Root */;
+			mainGroup = A10000000000000000000006;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000008 /* Products */;
@@ -318,15 +318,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000040 /* Build configuration list for PBXProject "DevWatchdog" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A10000000000000000000050 /* Debug */,
-				A10000000000000000000051 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A10000000000000000000020 /* Build configuration list for PBXNativeTarget "DevWatchdog" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -336,8 +327,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A10000000000000000000040 /* Build configuration list for PBXProject "DevWatchdog" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000050 /* Debug */,
+				A10000000000000000000051 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = A10000000000000000000030 /* Project object */;
 }

@@ -19,10 +19,17 @@ class ProcessMonitor: ObservableObject {
 
     // Track processes pending auto-kill (PID -> first seen time)
     private var pendingKills: [Int32: Date] = [:]
+    // Track which zombie batches we already notified about (to avoid repeat alerts)
+    private var notifiedZombiePIDs: Set<Int32> = []
 
     func start(config: WatchdogConfig) {
         self.config = config
-        Task { await notificationService.requestPermission() }
+
+        // Request notification permission
+        Task {
+            await notificationService.requestPermission()
+        }
+
         scheduleTimer()
 
         // Initial scan
@@ -32,7 +39,10 @@ class ProcessMonitor: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        pendingKills.removeAll()
+        notifiedZombiePIDs.removeAll()
     }
+
 
     func scan() async {
         guard !isScanning else { return }
@@ -50,39 +60,54 @@ class ProcessMonitor: ObservableObject {
         var whitelisted: [DevProcess] = []
 
         for process in processes {
+            // STAGE 1: Whitelisted -> protect
             if config.isWhitelisted(process) {
                 whitelisted.append(process)
                 continue
             }
 
+            // STAGE 2: Orphan + old enough -> ZOMBIE (auto-kill)
+            if process.isOrphan && (process.runtime ?? 0) >= config.orphanTimeout {
+                zombies.append(process)
+                continue
+            }
+
+            // STAGE 3: Rule-based (for non-orphans and young orphans)
             if let rule = config.matchingRule(for: process) {
-                if rule.isTriggered(by: process) {
-                    switch rule.action {
-                    case .autoKill:
-                        zombies.append(process)
-                    case .warn:
-                        suspects.append(process)
-                    case .ignore, .whitelist:
-                        break
-                    }
-                } else if rule.action != .ignore && rule.action != .whitelist {
-                    // Matches pattern but thresholds not yet exceeded
-                    suspects.append(process)
-                }
-            } else {
-                // No specific rule, check general orphan heuristic
-                if process.isOrphan && process.cpuPercent >= config.cpuThreshold
-                    && (process.runtime ?? 0) >= config.runtimeThreshold {
+                // Hard kill limit exceeded → zombie (even with living parent)
+                if rule.isMaxRuntimeExceeded(by: process) {
                     zombies.append(process)
-                } else if process.cpuPercent > 50 || (process.runtime ?? 0) > 600 {
+                } else if rule.isTriggered(by: process) {
+                    suspects.append(process)
+                } else if rule.action == .warn {
+                    // Matches warn pattern but thresholds not yet exceeded — still show
                     suspects.append(process)
                 }
+                continue
+            }
+
+            // STAGE 4: General heuristic (no matching rule)
+            let runtime = process.runtime ?? 0
+            if config.catchAllMaxRuntime > 0 && runtime >= config.catchAllMaxRuntime {
+                // Any dev process running longer than catch-all limit → zombie
+                zombies.append(process)
+            } else if process.cpuPercent > 50 || runtime > 600 {
+                suspects.append(process)
             }
         }
 
-        // Sort by severity (worst first)
-        zombies.sort { $0.severity > $1.severity || ($0.severity == $1.severity && $0.cpuPercent > $1.cpuPercent) }
-        suspects.sort { $0.cpuPercent > $1.cpuPercent }
+        // Sort: most obvious kill candidates first
+        // Zombies: longest runtime first (most obviously dead), then highest memory (most waste)
+        zombies.sort {
+            let r0 = $0.runtime ?? 0, r1 = $1.runtime ?? 0
+            if r0 != r1 { return r0 > r1 }
+            return $0.memoryMB > $1.memoryMB
+        }
+        // Suspects: highest CPU first (most impactful), then longest runtime
+        suspects.sort {
+            if $0.cpuPercent != $1.cpuPercent { return $0.cpuPercent > $1.cpuPercent }
+            return ($0.runtime ?? 0) > ($1.runtime ?? 0)
+        }
 
         self.allProcesses = processes
         self.zombieProcesses = zombies
@@ -92,11 +117,8 @@ class ProcessMonitor: ObservableObject {
         self.totalMemoryMB = processes.reduce(0) { $0 + $1.memoryMB }
         self.lastScan = Date()
 
-        // Handle auto-kill
+        // Handle auto-kill with grace period
         await handleAutoKill(zombies: zombies, config: config)
-
-        // Notify about new suspects/zombies
-        await handleNotifications(zombies: zombies, suspects: suspects, config: config)
     }
 
     func killProcess(_ process: DevProcess) {
@@ -106,23 +128,40 @@ class ProcessMonitor: ObservableObject {
         suspectProcesses.removeAll { $0.id == process.id }
         allProcesses.removeAll { $0.id == process.id }
         pendingKills.removeValue(forKey: process.pid)
+        notifiedZombiePIDs.remove(process.pid)
     }
 
     func killAllZombies() {
+        let memoryMB = zombieProcesses.reduce(0.0) { $0 + $1.memoryMB }
+        let count = zombieProcesses.count
+
         for process in zombieProcesses {
             killer.kill(pid: process.pid)
         }
-        let count = zombieProcesses.count
-        let cpuTotal = zombieProcesses.reduce(0) { $0 + $1.cpuPercent }
         zombieProcesses.removeAll()
         pendingKills.removeAll()
+        notifiedZombiePIDs.removeAll()
 
         if count > 0 {
             Task {
-                await notificationService.send(
-                    title: "Killed \(count) zombie processes",
-                    body: "Freed \(String(format: "%.0f", cpuTotal))% CPU"
-                )
+                await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
+            }
+        }
+    }
+
+    func killAllSuspects() {
+        let memoryMB = suspectProcesses.reduce(0.0) { $0 + $1.memoryMB }
+        let count = suspectProcesses.count
+
+        for process in suspectProcesses {
+            killer.kill(pid: process.pid)
+        }
+        suspectProcesses.removeAll()
+        allProcesses.removeAll { p in !zombieProcesses.contains(where: { $0.id == p.id }) && !whitelistedProcesses.contains(where: { $0.id == p.id }) }
+
+        if count > 0 {
+            Task {
+                await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
             }
         }
     }
@@ -140,59 +179,67 @@ class ProcessMonitor: ObservableObject {
     }
 
     private func handleAutoKill(zombies: [DevProcess], config: WatchdogConfig) async {
-        guard config.killMode != .notificationOnly else {
-            pendingKills.removeAll()
-            return
-        }
-
         let now = Date()
 
-        for zombie in zombies {
-            if config.killMode == .aggressive {
-                // Kill immediately
-                killer.kill(pid: zombie.pid)
-                await notificationService.send(
-                    title: "Auto-killed: \(zombie.processName)",
-                    body: "\(zombie.cpuFormatted) CPU, running \(zombie.runtimeFormatted)\(zombie.projectName.map { " (\($0))" } ?? "")"
-                )
-            } else {
-                // Smart mode: grace period
-                if let firstSeen = pendingKills[zombie.pid] {
-                    if now.timeIntervalSince(firstSeen) >= config.gracePeriod {
-                        killer.kill(pid: zombie.pid)
-                        pendingKills.removeValue(forKey: zombie.pid)
-                        await notificationService.send(
-                            title: "Auto-killed: \(zombie.processName)",
-                            body: "\(zombie.cpuFormatted) CPU, running \(zombie.runtimeFormatted)\(zombie.projectName.map { " (\($0))" } ?? "")"
-                        )
-                    }
-                    // else: still within grace period, wait
-                } else {
-                    // First time seeing this zombie
-                    pendingKills[zombie.pid] = now
-                    let remaining = Int(config.gracePeriod)
-                    await notificationService.send(
-                        title: "Zombie detected: \(zombie.processName)",
-                        body: "\(zombie.cpuFormatted) CPU, running \(zombie.runtimeFormatted). Will kill in \(remaining)s.\(zombie.projectName.map { " (\($0))" } ?? "")"
-                    )
-                }
+        // Find new zombies we haven't notified about yet
+        let newZombiePIDs = Set(zombies.map(\.pid)).subtracting(notifiedZombiePIDs)
+
+        // Send batch notification for new zombies
+        if !newZombiePIDs.isEmpty {
+            let newZombies = zombies.filter { newZombiePIDs.contains($0.pid) }
+
+            // Group by project for summary
+            var projects: [String: Int] = [:]
+            for z in newZombies {
+                let key = z.projectName ?? "unknown"
+                projects[key, default: 0] += 1
             }
+            let totalMemory = newZombies.reduce(0.0) { $0 + $1.memoryMB }
+
+            await notificationService.sendBatchZombieAlert(
+                count: newZombies.count,
+                projects: projects,
+                totalMemoryMB: totalMemory
+            )
+
+            notifiedZombiePIDs.formUnion(newZombiePIDs)
+        }
+
+        // Track grace period and kill when expired
+        var killedCount = 0
+        var freedMemory = 0.0
+
+        for zombie in zombies {
+            if let firstSeen = pendingKills[zombie.pid] {
+                if now.timeIntervalSince(firstSeen) >= config.gracePeriod {
+                    killer.kill(pid: zombie.pid)
+                    pendingKills.removeValue(forKey: zombie.pid)
+                    notifiedZombiePIDs.remove(zombie.pid)
+                    killedCount += 1
+                    freedMemory += zombie.memoryMB
+                }
+                // else: still within grace period, wait
+            } else {
+                // First time seeing this zombie — start grace period
+                pendingKills[zombie.pid] = now
+            }
+        }
+
+        // Send batch kill summary
+        if killedCount > 0 {
+            await notificationService.sendBatchKillSummary(count: killedCount, freedMemoryMB: freedMemory)
+
+            // Remove killed zombies from published list
+            let killedPIDs = Set(zombies.filter { pid in
+                pendingKills[pid.pid] == nil && !notifiedZombiePIDs.contains(pid.pid)
+            }.map(\.pid))
+            zombieProcesses.removeAll { killedPIDs.contains($0.pid) }
         }
 
         // Clean up pending kills for processes that are no longer zombies
         let zombiePIDs = Set(zombies.map(\.pid))
         pendingKills = pendingKills.filter { zombiePIDs.contains($0.key) }
-    }
-
-    private func handleNotifications(zombies: [DevProcess], suspects: [DevProcess], config: WatchdogConfig) async {
-        // Sound on critical CPU load
-        if config.soundOnCritical && totalCPU >= config.criticalCPUThreshold {
-            await notificationService.send(
-                title: "Critical CPU load: \(String(format: "%.0f", totalCPU))%",
-                body: "\(zombies.count) zombies, \(suspects.count) suspects detected",
-                sound: true
-            )
-        }
+        notifiedZombiePIDs = notifiedZombiePIDs.intersection(zombiePIDs)
     }
 }
 
@@ -209,10 +256,28 @@ enum PSParser: Sendable {
         let startTime: Date?
     }
 
+    // Known non-dev Electron/desktop apps to exclude
+    private static let excludedApps = [
+        "/Notion.app/", "/Slack.app/", "/Discord.app/",
+        "/Spotify.app/", "/Figma.app/", "/1Password.app/",
+        "/Microsoft", "/Linear.app/", "/Obsidian.app/",
+        "/WhatsApp.app/", "/Telegram.app/", "/Signal.app/",
+        "/zoom.us.app/", "/Google Chrome.app/", "/Firefox.app/",
+        "/Safari.app/", "/Arc.app/", "/Brave Browser.app/",
+    ]
+
     static func parseProcessList() -> [DevProcess] {
         let pipe = Pipe()
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+
+        // Check if ps command exists before running
+        let psURL = URL(fileURLWithPath: "/bin/ps")
+        guard FileManager.default.fileExists(atPath: psURL.path) else {
+            print("DevWatchdog: ps command not found at /bin/ps")
+            return []
+        }
+
+        process.executableURL = psURL
         process.arguments = ["aux"]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
@@ -220,6 +285,7 @@ enum PSParser: Sendable {
         do {
             try process.run()
         } catch {
+            print("DevWatchdog: Failed to run ps command: \(error.localizedDescription)")
             return []
         }
 
@@ -245,12 +311,34 @@ enum PSParser: Sendable {
             // Only track dev-related processes
             let cmd = parsed.command.lowercased()
             let isDevProcess = cmd.contains("node") || cmd.contains("vitest") ||
-                cmd.contains("jest") || cmd.contains("tsc") || cmd.contains("esbuild") ||
-                cmd.contains("next") || cmd.contains("webpack") || cmd.contains("turbo") ||
-                cmd.contains("eslint") || cmd.contains("prettier") || cmd.contains("mcp") ||
-                cmd.contains("pnpm") || cmd.contains("npm run") || cmd.contains("yarn")
+                cmd.contains("jest") || cmd.contains("tsc") || cmd.contains("tsgo") ||
+                cmd.contains("esbuild") || cmd.contains("next") || cmd.contains("webpack") ||
+                cmd.contains("turbo") || cmd.contains("eslint") || cmd.contains("prettier") ||
+                cmd.contains("mcp") || cmd.contains("pnpm") || cmd.contains("npm run") ||
+                cmd.contains("yarn") || cmd.contains("playwright") ||
+                cmd.contains("ms-playwright") || cmd.contains("percy") ||
+                cmd.contains("react-email")
 
             guard isDevProcess else { continue }
+
+            // Playwright-spawned browsers are dev processes — never exclude them
+            let isPlaywrightBrowser = parsed.command.contains("ms-playwright")
+
+            // Exclude known non-dev Electron/desktop apps (but not Playwright browsers)
+            if !isPlaywrightBrowser {
+                let isExcludedApp = excludedApps.contains { parsed.command.contains($0) }
+                guard !isExcludedApp else { continue }
+            }
+
+            // Also exclude anything under /Applications/ that isn't a dev tool
+            if !isPlaywrightBrowser && parsed.command.contains("/Applications/") {
+                let isDevApp = parsed.command.contains("Visual Studio Code") ||
+                    parsed.command.contains("Cursor") ||
+                    parsed.command.contains("iTerm") ||
+                    parsed.command.contains("Terminal") ||
+                    parsed.command.contains("Warp")
+                if !isDevApp { continue }
+            }
 
             // Check if orphan (parent PID = 1 means adopted by launchd)
             let parentPID = getParentPID(parsed.pid)

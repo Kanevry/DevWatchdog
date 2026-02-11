@@ -30,22 +30,20 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
-            Section("Kill Mode") {
-                Picker("Mode", selection: $config.killMode) {
-                    ForEach(KillMode.allCases, id: \.self) { mode in
-                        VStack(alignment: .leading) {
-                            Text(mode.displayName)
-                            Text(mode.description)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .tag(mode)
-                    }
+            Section("Auto-Kill") {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                    Text("Auto-Kill active")
+                        .fontWeight(.medium)
                 }
-                .pickerStyle(.radioGroup)
+                Text("Orphaned dev processes are automatically killed after the grace period.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Section("Scan Settings") {
+            Section("Timing") {
                 LabeledContent("Scan interval") {
                     HStack {
                         Slider(value: $config.scanInterval, in: 10...120, step: 5)
@@ -56,54 +54,48 @@ struct SettingsView: View {
                     }
                 }
 
-                if config.killMode == .smart {
-                    LabeledContent("Grace period") {
-                        HStack {
-                            Slider(value: $config.gracePeriod, in: 10...120, step: 5)
-                                .frame(maxWidth: 200)
-                            Text("\(Int(config.gracePeriod))s")
-                                .monospacedDigit()
-                                .frame(width: 40, alignment: .trailing)
-                        }
-                    }
-                }
-            }
-
-            Section("Thresholds (for processes without specific rules)") {
-                LabeledContent("CPU threshold") {
+                LabeledContent("Orphan timeout") {
                     HStack {
-                        Slider(value: $config.cpuThreshold, in: 10...200, step: 10)
+                        Slider(value: $config.orphanTimeout, in: 30...600, step: 10)
                             .frame(maxWidth: 200)
-                        Text("\(Int(config.cpuThreshold))%")
+                        Text(formatDuration(config.orphanTimeout))
                             .monospacedDigit()
                             .frame(width: 50, alignment: .trailing)
                     }
                 }
+                Text("How long an orphaned process may live before it's marked as zombie.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                LabeledContent("Runtime threshold") {
+                LabeledContent("Grace period") {
                     HStack {
-                        Slider(value: $config.runtimeThreshold, in: 60...7200, step: 60)
+                        Slider(value: $config.gracePeriod, in: 10...120, step: 5)
                             .frame(maxWidth: 200)
-                        Text(formatDuration(config.runtimeThreshold))
+                        Text("\(Int(config.gracePeriod))s")
+                            .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
+                Text("Warning time before a zombie is killed. You can intervene during this time.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Catch-all kill") {
+                    HStack {
+                        Slider(value: $config.catchAllMaxRuntime, in: 3600...86400, step: 3600)
+                            .frame(maxWidth: 200)
+                        Text(formatDuration(config.catchAllMaxRuntime))
                             .monospacedDigit()
                             .frame(width: 50, alignment: .trailing)
                     }
                 }
+                Text("Any dev process without a specific rule running longer than this is killed. Safety net.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Notifications") {
-                Toggle("Sound on critical CPU load", isOn: $config.soundOnCritical)
-                if config.soundOnCritical {
-                    LabeledContent("Critical threshold") {
-                        HStack {
-                            Slider(value: $config.criticalCPUThreshold, in: 100...2000, step: 50)
-                                .frame(maxWidth: 200)
-                            Text("\(Int(config.criticalCPUThreshold))%")
-                                .monospacedDigit()
-                                .frame(width: 60, alignment: .trailing)
-                        }
-                    }
-                }
+                Toggle("Sound alerts", isOn: $config.soundOnCritical)
             }
 
             Section("System") {
@@ -131,7 +123,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Process Rules")
                 .font(.headline)
-            Text("Define how DevWatchdog handles specific process patterns.")
+            Text("Define how DevWatchdog handles specific process patterns. Orphaned processes are always auto-killed regardless of rules (unless whitelisted).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -147,7 +139,7 @@ struct SettingsView: View {
 
             // Add new rule
             HStack {
-                TextField("Pattern (e.g. vitest.*worker)", text: $newRulePattern)
+                TextField("Pattern (e.g. next.*dev)", text: $newRulePattern)
                     .textFieldStyle(.roundedBorder)
 
                 Button("Add Rule") {
@@ -155,8 +147,9 @@ struct SettingsView: View {
                     let rule = ProcessRule(
                         id: UUID(),
                         pattern: newRulePattern,
-                        cpuThreshold: config.cpuThreshold,
-                        runtimeThreshold: config.runtimeThreshold,
+                        cpuThreshold: 50,
+                        runtimeThreshold: 1800,
+                        maxRuntime: 3600,
                         action: .warn,
                         isEnabled: true
                     )
@@ -189,26 +182,33 @@ struct SettingsView: View {
                 .frame(width: 180)
             }
 
-            if rule.wrappedValue.action != .whitelist && rule.wrappedValue.action != .ignore {
-                HStack(spacing: 16) {
+            if rule.wrappedValue.action == .warn {
+                HStack(spacing: 12) {
                     HStack(spacing: 4) {
-                        Text("CPU:")
+                        Text("Warn:")
                             .foregroundStyle(.secondary)
                         TextField("CPU %", value: rule.cpuThreshold, format: .number)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 60)
-                        Text("%")
+                            .frame(width: 50)
+                        Text("% CPU")
                             .foregroundStyle(.secondary)
                     }
 
                     HStack(spacing: 4) {
-                        Text("Runtime:")
-                            .foregroundStyle(.secondary)
                         TextField("Seconds", value: rule.runtimeThreshold, format: .number)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 70)
+                            .frame(width: 60)
                         Text("s (\(formatDuration(rule.wrappedValue.runtimeThreshold)))")
                             .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 4) {
+                        Text("Kill:")
+                            .foregroundStyle(.red)
+                        TextField("Max s", value: rule.maxRuntime, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                        Text("s (\(formatDuration(rule.wrappedValue.maxRuntime)))")
+                            .foregroundStyle(.red.opacity(0.7))
                     }
                 }
                 .font(.caption)

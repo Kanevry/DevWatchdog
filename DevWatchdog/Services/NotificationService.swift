@@ -4,27 +4,35 @@ import UserNotifications
 @MainActor
 final class NotificationService {
     private let center = UNUserNotificationCenter.current()
-    private var isAuthorized = false
+    private var authorizationStatus: UNAuthorizationStatus = .notDetermined
 
     func requestPermission() async {
-        do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
-            isAuthorized = granted
-            if !granted {
-                print("DevWatchdog: Notification permission denied by user.")
+        let settings = await center.notificationSettings()
+        authorizationStatus = settings.authorizationStatus
+
+        if authorizationStatus == .notDetermined {
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                authorizationStatus = granted ? .authorized : .denied
+                if !granted {
+                    print("DevWatchdog: Notification permission denied by user.")
+                }
+            } catch {
+                print("DevWatchdog: Notification permission error: \(error.localizedDescription)")
+                authorizationStatus = .denied
             }
-        } catch {
-            print("DevWatchdog: Notification permission error: \(error.localizedDescription)")
         }
     }
 
     func send(title: String, body: String, sound: Bool = false) async {
-        // Check current authorization before sending
-        let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized else {
-            // Silently skip - user denied or not yet asked
-            return
+        if authorizationStatus == .notDetermined {
+            await requestPermission()
         }
+
+        let settings = await center.notificationSettings()
+        authorizationStatus = settings.authorizationStatus
+
+        guard authorizationStatus == .authorized else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title
@@ -36,7 +44,7 @@ final class NotificationService {
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
-            trigger: nil // Deliver immediately
+            trigger: nil
         )
 
         do {
@@ -44,5 +52,28 @@ final class NotificationService {
         } catch {
             print("DevWatchdog: Failed to send notification: \(error.localizedDescription)")
         }
+    }
+
+    func sendBatchZombieAlert(count: Int, projects: [String: Int], totalMemoryMB: Double) async {
+        let projectSummary = projects
+            .sorted { $0.value > $1.value }
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: ", ")
+
+        let body: String
+        if projectSummary.isEmpty {
+            body = "\(count) zombie process\(count == 1 ? "" : "es") detected. \(String(format: "%.0f", totalMemoryMB)) MB memory. Will kill after grace period."
+        } else {
+            body = "\(count) zombies (\(projectSummary)). \(String(format: "%.0f", totalMemoryMB)) MB memory. Will kill after grace period."
+        }
+
+        await send(title: "Zombies detected", body: body, sound: true)
+    }
+
+    func sendBatchKillSummary(count: Int, freedMemoryMB: Double) async {
+        await send(
+            title: "Killed \(count) zombie process\(count == 1 ? "" : "es")",
+            body: "Freed \(String(format: "%.0f", freedMemoryMB)) MB memory."
+        )
     }
 }

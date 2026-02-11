@@ -6,10 +6,30 @@ struct DevWatchdogApp: App {
     @StateObject private var processMonitor = ProcessMonitor()
     @StateObject private var config = WatchdogConfig()
     @State private var settingsWindow: NSWindow?
+    @State private var hasStarted = false
+
+    // Store observer token — nonisolated(unsafe) static because App is a struct
+    nonisolated(unsafe) private static var terminationObserver: NSObjectProtocol?
 
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(monitor: processMonitor, config: config, openSettings: openSettings)
+                .task {
+                    guard !hasStarted else { return }
+                    hasStarted = true
+
+                    processMonitor.start(config: config)
+
+                    Self.terminationObserver = NotificationCenter.default.addObserver(
+                        forName: NSApplication.willTerminateNotification,
+                        object: nil,
+                        queue: .main
+                    ) { [weak processMonitor] _ in
+                        MainActor.assumeIsolated {
+                            processMonitor?.stop()
+                        }
+                    }
+                }
         } label: {
             menuBarLabel
         }

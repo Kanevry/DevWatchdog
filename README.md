@@ -6,7 +6,7 @@
 
 > Your Mac shouldn't be a space heater because of zombie Node.js processes.
 
-**DevWatchdog** is a lightweight macOS menu bar app that monitors and automatically kills zombie development processes (Vitest workers, Jest, tsc, esbuild, webpack) that keep running after their parent crashes or exits.
+**DevWatchdog** is a lightweight macOS menu bar app that monitors and automatically kills zombie development processes — orphaned Vitest workers, stale Jest runners, forgotten tsc builds, idle MCP servers, and Playwright browsers that outlive their test runs.
 
 <p align="center">
   <img src="docs/screenshot-menu.png" alt="DevWatchdog Menu Bar" width="400" />
@@ -18,65 +18,101 @@ If you work with Node.js, you've seen this:
 
 ```
 PID    %CPU  TIME     COMMAND
-48291  100%  2:15:33  node vitest/dist/chunks/forks.abc123.js
-48292  100%  2:15:33  node vitest/dist/chunks/forks.abc123.js
-48293  100%  2:15:33  node vitest/dist/chunks/forks.abc123.js
-48294  100%  2:15:33  node vitest/dist/chunks/forks.abc123.js
+48291  0.0%  2:15:33  node vitest/dist/chunks/forks.abc123.js
+48292  0.0%  2:15:33  node vitest/dist/chunks/forks.abc123.js
+...73 more...
 ```
 
-Seven Vitest fork workers at 100% CPU each. For two hours. The parent process crashed, but the children keep spinning forever, turning your MacBook into a jet engine.
+73 Vitest fork workers sitting at 0% CPU for two hours. The parent process crashed, but the children stay orphaned forever — eating 1.2 GB of memory and never cleaning themselves up.
 
 **Why does this happen?**
-- **Vitest/Jest fork workers**: Spawned via `child_process.fork()`. If the parent dies via SIGKILL, children never get the signal - they spin in an infinite event loop waiting for IPC messages that never come.
+- **Vitest/Jest fork workers**: Spawned via `child_process.fork()`. If the parent dies, children never get the signal — they sit in an infinite event loop waiting for IPC messages that never come.
+- **MCP servers**: Claude Code, Cursor, and other AI tools spawn MCP server processes that outlive their sessions — often with living parents that aren't actually using them anymore.
 - **esbuild --service**: Stays running as a daemon even after the calling process exits.
-- **tsc --watch**: Forgotten watch-mode processes accumulate over time.
-- **MCP servers**: Claude Code, Cursor, and other AI tools spawn MCP server processes that outlive their sessions.
+- **Playwright browsers**: Chromium, Firefox, WebKit processes left behind after test runs.
+- **next dev / tsc**: Long-running servers and compilers that accumulate over time.
+
+## How It Works — The Decision Chain
+
+Every 30 seconds, DevWatchdog scans and classifies each process:
+
+```
+Process detected
+│
+├── EXCLUDED?            → Ignore (Notion, Slack, Spotify, browsers...)
+│
+├── WHITELISTED?         → Show, never kill
+│
+├── ORPHAN + old enough? → ZOMBIE → Grace period → Auto-kill
+│   (parent dead, nobody managing it — safe to kill)
+│
+├── maxRuntime exceeded? → ZOMBIE → Grace period → Auto-kill
+│   (running way too long for its type — even with living parent)
+│
+├── Warn thresholds hit? → SUSPECT → Show, manual kill available
+│   (has living parent, but looks suspicious)
+│
+└── Normal               → Not shown
+```
+
+**Key insight**: A process with a dead parent (PPID=1) will never clean itself up. That's the primary kill signal. For processes with living parents, each process type has a maximum runtime — a vitest worker should never run 20 minutes, a tsc build should never take 8 minutes.
 
 ## Features
 
-### Smart Zombie Detection
-- Monitors `node`, `vitest`, `jest`, `tsc`, `esbuild`, `webpack`, `turbopack`, `eslint`, and more
-- **Orphan detection**: Identifies processes whose parent has died (adopted by `launchd`, PPID=1)
-- **Project-aware**: Shows which project a zombie belongs to (e.g., "BuchhaltGenieV5: 3 zombies")
-- Configurable CPU and runtime thresholds per process pattern
+### Orphan-First Detection
+- **Primary signal**: `isOrphan` (PPID=1) — parent is dead, nobody manages this process
+- **Secondary signal**: `maxRuntime` exceeded — process-type-specific hard kill limits
+- **Safety**: Whitelisted processes are always protected. 30s grace period before every auto-kill.
 
-### Three Kill Modes
+### Process-Type-Specific Timeouts
 
-| Mode | Behavior | Best For |
-|------|----------|----------|
-| **Smart Auto-Kill** (default) | Kills orphan zombies after a 30s grace period + notification | Daily use |
-| **Notification Only** | Warns but never kills automatically | Cautious users |
-| **Aggressive** | Kills matching processes immediately | "Just fix it" |
+Every process type has its own maximum runtime, based on real-world thresholds:
+
+| Process | Warn After | Auto-Kill After |
+|---------|-----------|----------------|
+| vitest workers | 10 min | **20 min** |
+| vitest main | 10 min | **15 min** |
+| jest | 10 min | **15 min** |
+| tsgo (native) | 2 min | **5 min** |
+| tsc | 4 min | **8 min** |
+| next build / esbuild | 10 min | **20 min** |
+| Playwright + browsers | 5 min | **10 min** |
+| Percy visual testing | 30 min | **45 min** |
+| next dev | 2 h | **3 h** |
+| react-email dev | 1 h | **2 h** |
+| MCP servers | 2 h | **4 h** |
+| pnpm / npm | 15 min | **30 min** |
+| *Any unmatched process* | 10 min | **8 h** (catch-all) |
+
+### Sticky Action Bar
+
+When processes need attention, two action buttons appear at the top of the menu (always visible, no scrolling needed):
+
+- **"Kill N Zombies"** — Always green. Orphaned or expired processes. Safe to click without thinking.
+- **"Kill N Suspects"** — Traffic light color based on risk:
+  - **Green**: All suspects at 0% CPU — idle junk, safe to kill
+  - **Yellow**: Some low CPU activity — probably safe, quick review recommended
+  - **Red**: Active CPU usage (>50%) — likely running work, check the list first
+
+### Smart App Exclusions
+
+Non-dev Electron apps are automatically excluded: Notion, Slack, Discord, Spotify, Figma, 1Password, Microsoft apps, Linear, Obsidian, WhatsApp, Telegram, Signal, Zoom, browsers. Playwright-spawned browsers (under `ms-playwright/`) are correctly detected as dev processes.
+
+### Batch Notifications
+
+Instead of 73 individual alerts:
+- **Detection**: "37 zombies detected (BuchhaltGenieV5: 30 jest workers, 5 esbuild, 2 vitest). Will kill after grace period."
+- **After kill**: "37 zombies killed. Freed 1.2 GB memory."
 
 ### Menu Bar at a Glance
 - **Green shield**: All clear, no zombies
 - **Orange eye + count**: Suspect processes being watched
-- **Red warning + count**: Zombies detected (will be killed in Smart mode)
+- **Red warning + count**: Zombies detected, auto-kill pending
 
 ### Per-Process Actions
 - One-click kill for individual processes
-- "Kill All Zombies" button
-- Whitelist processes you want to protect (e.g., `next dev`)
-- Shows PID, CPU%, memory, runtime, project name, and orphan status
-
-### Fully Configurable
-
-<p align="center">
-  <img src="docs/screenshot-settings-top.png" alt="DevWatchdog Settings - General" width="380" />
-  <img src="docs/screenshot-rules.png" alt="DevWatchdog Settings - Rules" width="380" />
-</p>
-
-<p align="center">
-  <img src="docs/screenshot-settings-bottom.png" alt="DevWatchdog Settings - Thresholds" width="380" />
-  <img src="docs/screenshot-about.png" alt="DevWatchdog Settings - About" width="380" />
-</p>
-
-- Custom process rules with glob patterns (e.g., `vitest.*forks`)
-- Per-rule CPU threshold, runtime threshold, and action (auto-kill / warn / ignore / whitelist)
-- Scan interval (10-120 seconds)
-- Grace period before auto-kill (10-120 seconds)
-- Sound alert on critical total CPU load
-- Launch at login
+- Kill All Zombies / Kill All Suspects buttons
+- Shows PID, CPU%, memory, runtime, and project name
 
 ## Installation
 
@@ -85,7 +121,7 @@ Seven Vitest fork workers at 100% CPU each. For two hours. The parent process cr
 1. Go to [Releases](https://github.com/Kanevry/DevWatchdog/releases)
 2. Download `DevWatchdog.app.zip`
 3. Unzip and drag to `/Applications`
-4. Open DevWatchdog - it appears in your menu bar
+4. Open DevWatchdog — it appears in your menu bar
 
 > **Note**: On first launch, macOS may show a security dialog. Go to **System Settings > Privacy & Security** and click "Open Anyway".
 
@@ -112,38 +148,53 @@ xcodebuild -project DevWatchdog.xcodeproj \
 
 The built app will be at `build/Build/Products/Release/DevWatchdog.app`.
 
-## Default Rules
+## Settings
 
-These rules come pre-configured and can be customized in Settings > Rules:
+### General Tab
 
-| Pattern | CPU Threshold | Runtime Threshold | Action |
-|---------|--------------|-------------------|--------|
-| `vitest.*forks` | 80% | 15 min | Auto-Kill |
-| `vitest.*worker` | 80% | 15 min | Auto-Kill |
-| `vitest.*child` | 80% | 15 min | Auto-Kill |
-| `jest.*worker` | 80% | 15 min | Auto-Kill |
-| `jest` | 80% | 15 min | Auto-Kill |
-| `tsc` | 50% | 30 min | Warn |
-| `esbuild.*service` | 0% | 60 min | Auto-Kill |
-| `next.*dev` | - | - | Whitelist |
-| `mcp` | 5% | 120 min | Warn |
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Scan interval | 30s | How often to check for processes (10-120s) |
+| Orphan timeout | 2 min | How long an orphaned process may live before becoming a zombie |
+| Grace period | 30s | Warning time before auto-kill (user can intervene) |
+| Catch-all kill | 8 h | Any unmatched dev process running longer than this is killed |
+| Sound alerts | On | Play sound on zombie detection |
+| Launch at login | Off | Start DevWatchdog automatically |
 
-## How It Works
+### Rules Tab
 
-1. **Scan**: Every 30 seconds (configurable), DevWatchdog runs `ps aux` and filters for development-related processes owned by the current user.
+Custom rules with glob patterns. Each rule has:
+- **Pattern**: Glob match on the command string (e.g., `vitest.*forks`)
+- **Action**: Whitelist (never kill), Warn (show as suspect), Ignore (hide)
+- **Warn thresholds**: CPU% and runtime before showing as suspect
+- **Max runtime**: Hard kill limit — process becomes zombie when exceeded
 
-2. **Classify**: Each process is checked against your rules:
-   - Does it match a pattern? (e.g., `vitest.*forks`)
-   - Is CPU above threshold? (e.g., >80%)
-   - Has it been running longer than threshold? (e.g., >15 min)
-   - Is it an orphan? (parent PID = 1, adopted by launchd)
+All default rules can be customized or disabled.
 
-3. **Act**: Based on the kill mode:
-   - **Smart**: Orphan zombies get a 30s grace period, then SIGTERM, then SIGKILL after 5s
-   - **Notification Only**: Shows macOS notification, user decides
-   - **Aggressive**: Immediate SIGTERM + SIGKILL fallback
+## Process Lifecycle
 
-4. **Notify**: macOS notifications for every detection and kill action. Optional sound alert when total monitored CPU exceeds a threshold (default: 500%).
+```
+Process starts
+    │
+    ▼
+NORMAL (not shown)
+    │  Warn thresholds exceeded
+    ▼
+SUSPECT (shown, manual kill available)
+    │  maxRuntime exceeded OR becomes orphan
+    ▼
+ZOMBIE (shown, grace period running)
+    │  30s grace period
+    ▼
+KILLED (auto-kill + notification)
+```
+
+| Transition | Trigger | Automatic? |
+|-----------|---------|-----------|
+| Normal → Suspect | Warn thresholds exceeded, or CPU >50%, or runtime >10min | Yes |
+| Suspect → Zombie | maxRuntime exceeded, or parent dies + orphan timeout | Yes |
+| Zombie → Killed | Grace period (30s) expires | **Yes, auto-kill** |
+| Suspect → Killed | User clicks Kill or Kill All Suspects | Manual |
 
 ## System Requirements
 
@@ -156,7 +207,7 @@ These rules come pre-configured and can be customized in Settings > Rules:
 - **No network access**: DevWatchdog never connects to the internet
 - **No telemetry**: Zero data collection
 - **Local only**: All configuration stored in UserDefaults on your Mac
-- **No sandbox**: Required to run `ps aux` and send `kill` signals. The app cannot function in a sandboxed environment.
+- **No sandbox**: Required to run `ps aux` and send `kill` signals
 - **Open source**: Every line of code is auditable
 
 ## Tech Stack
@@ -180,23 +231,26 @@ Contributions are welcome! Here are some ideas:
 - **Menubar CPU chart**: Mini sparkline showing CPU trend
 - **Keyboard shortcuts**: Global hotkey for "Kill All Zombies"
 - **Homebrew Cask**: Package for `brew install --cask devwatchdog`
-- **Localization**: Translate to other languages
+- **Docker monitoring**: Track unhealthy Supabase/Redis containers
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.
 
 ## FAQ
 
 ### Will this kill my dev server?
-No. `next dev` is whitelisted by default. You can add any process pattern to the whitelist in Settings > Rules.
+`next dev` has a 3-hour max runtime by default. If you need longer sessions, increase the max runtime in Settings > Rules. Whitelisted processes are never killed.
+
+### Will this kill processes that are actively running tests?
+No. A vitest worker only becomes a zombie after 20 minutes — a normal test run finishes in 5-8 minutes. If a worker is still running after 20 minutes, it's stuck.
+
+### What about MCP servers while I'm using Claude Code?
+MCP servers have a 4-hour max runtime. During active use they'll be suspects at most. If you close Claude Code, they become orphans and get killed after 2 minutes.
 
 ### Does it need root/admin access?
 No. It only monitors and kills processes owned by your user account.
 
 ### How is this different from Activity Monitor?
-Activity Monitor shows everything but does nothing automatically. DevWatchdog focuses specifically on developer tool zombies and handles them for you.
-
-### Why not just use `pkill`?
-You could, but you'd have to remember to run it, know the right patterns, and not accidentally kill processes you need. DevWatchdog does this continuously and intelligently.
+Activity Monitor shows everything but does nothing automatically. DevWatchdog focuses specifically on developer tool zombies and handles them for you — with process-type-specific intelligence.
 
 ### Can I add rules for Python/Ruby/Go processes?
 Yes! In Settings > Rules, add a new pattern (e.g., `python.*celery`) with your desired thresholds.
@@ -207,4 +261,4 @@ Yes! In Settings > Rules, add a new pattern (e.g., `python.*celery`) with your d
 
 ---
 
-*Built with frustration and Swift by a developer who was tired of his Mac sounding like a hairdryer.*
+*Built with frustration and Swift by a developer who was tired of zombie processes eating his RAM.*
