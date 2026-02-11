@@ -109,6 +109,13 @@ Instead of 73 individual alerts:
 - **Orange eye + count**: Suspect processes being watched
 - **Red warning + count**: Zombies detected, auto-kill pending
 
+### Fully Configurable
+
+<p align="center">
+  <img src="docs/screenshot-settings.png" alt="DevWatchdog Settings" width="380" />
+  <img src="docs/screenshot-rules.png" alt="DevWatchdog Rules" width="380" />
+</p>
+
 ### Per-Process Actions
 - One-click kill for individual processes
 - Kill All Zombies / Kill All Suspects buttons

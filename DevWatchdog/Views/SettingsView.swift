@@ -234,7 +234,7 @@ struct SettingsView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("v1.0.0")
+            Text("v2.0.0")
                 .foregroundStyle(.secondary)
 
             Text("Automatic cleanup of zombie Node.js processes on macOS.")
