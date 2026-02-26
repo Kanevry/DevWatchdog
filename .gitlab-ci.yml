@@ -1,0 +1,37 @@
+# DevWatchdog — GitLab CI (macOS)
+#
+# Requires: macOS runner with tag "macbook-swift" and Xcode 16.2+
+# Migrated from GitHub Actions build.yml
+
+stages:
+  - build
+
+variables:
+  SCHEME: DevWatchdog
+  PROJECT: DevWatchdog.xcodeproj
+  DESTINATION: "platform=macOS"
+
+build:
+  tags:
+    - macbook-swift
+  stage: build
+  before_script:
+    - sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+  script:
+    - xcodebuild
+        -project ${PROJECT}
+        -scheme ${SCHEME}
+        -configuration Release
+        -derivedDataPath build
+        -destination "${DESTINATION}"
+        CODE_SIGN_IDENTITY=""
+        CODE_SIGNING_REQUIRED=NO
+        build
+  artifacts:
+    paths:
+      - build/Build/Products/Release/DevWatchdog.app
+    expire_in: 7 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"
