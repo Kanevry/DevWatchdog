@@ -1,6 +1,6 @@
 # DevWatchdog — GitLab CI (macOS)
 #
-# Requires: macOS runner with tag "macbook-swift" and Xcode 16.2+
+# Requires: macOS runner with tag "macbook-swift"
 # Migrated from GitHub Actions build.yml
 
 stages:
@@ -16,7 +16,7 @@ build:
     - macbook-swift
   stage: build
   before_script:
-    - sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+    - xcodebuild -version
   script:
     - xcodebuild
         -project ${PROJECT}
