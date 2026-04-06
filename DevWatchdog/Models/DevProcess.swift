@@ -124,12 +124,15 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     }
 
     var projectName: String? {
-        // Extract project from path: /Users/.../Projects/ProjectName/...
-        guard let range = command.range(of: "/Projects/") else { return nil }
-        let after = command[range.upperBound...]
-        let projectPart = after.prefix(while: { $0 != "/" && $0 != " " })
-        if projectPart.isEmpty { return nil }
-        return String(projectPart)
+        let markers = ["/Projects/", "/Developer/", "/repos/", "/src/", "/workspace/", "/Sites/"]
+        for marker in markers {
+            if let range = command.range(of: marker, options: .caseInsensitive) {
+                let after = command[range.upperBound...]
+                let projectPart = after.prefix(while: { $0 != "/" && $0 != " " })
+                if !projectPart.isEmpty { return String(projectPart) }
+            }
+        }
+        return nil
     }
 
     // Severity for sorting — orphan is the primary signal
@@ -138,5 +141,37 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         if cpuPercent > 80 { return 2 }
         if cpuPercent > 50 { return 1 }
         return 0
+    }
+}
+
+// MARK: - Process Grouping
+
+struct ProcessGroup: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let projectName: String?
+    let processes: [DevProcess]
+
+    var totalCPU: Double { processes.reduce(0) { $0 + $1.cpuPercent } }
+    var totalMemoryMB: Double { processes.reduce(0) { $0 + $1.memoryMB } }
+    var count: Int { processes.count }
+    var maxCPU: Double { processes.map(\.cpuPercent).max() ?? 0 }
+    var hasOrphans: Bool { processes.contains { $0.isOrphan } }
+}
+
+extension Array where Element == DevProcess {
+    func grouped() -> [ProcessGroup] {
+        let dict = Dictionary(grouping: self) { process in
+            "\(process.processName)-\(process.parentPID)"
+        }
+        return dict.map { (key, processes) in
+            ProcessGroup(
+                id: key,
+                name: processes.first?.processName ?? "unknown",
+                projectName: processes.first?.projectName,
+                processes: processes
+            )
+        }
+        .sorted { $0.totalCPU > $1.totalCPU }
     }
 }

@@ -36,8 +36,10 @@ struct MenuBarView: View {
                         whitelistedSection
                     }
                 }
+                .animation(.easeInOut(duration: 0.2), value: monitor.zombieProcesses.count)
+                .animation(.easeInOut(duration: 0.2), value: monitor.suspectProcesses.count)
             }
-            .frame(maxHeight: 400)
+            .frame(maxHeight: dynamicMaxHeight)
 
             Divider()
 
@@ -45,6 +47,11 @@ struct MenuBarView: View {
             footerSection
         }
         .frame(width: 380)
+    }
+
+    private var dynamicMaxHeight: CGFloat {
+        let processCount = monitor.zombieProcesses.count + monitor.suspectProcesses.count + monitor.whitelistedProcesses.count
+        return min(max(CGFloat(processCount) * 44 + 120, 200), 600)
     }
 
     // MARK: - Header
@@ -216,9 +223,20 @@ struct MenuBarView: View {
                 icon: "exclamationmark.triangle.fill"
             )
 
-            ForEach(monitor.zombieProcesses) { process in
-                ProcessRowView(process: process, isZombie: true) {
-                    monitor.killProcess(process)
+            let groups = monitor.zombieProcesses.grouped()
+            ForEach(groups) { group in
+                if group.count == 1 {
+                    ProcessRowView(process: group.processes[0], isZombie: true) {
+                        monitor.killProcess(group.processes[0])
+                    }
+                } else {
+                    ProcessGroupRowView(group: group, isZombie: true) { process in
+                        monitor.killProcess(process)
+                    } onKillGroup: {
+                        for process in group.processes {
+                            monitor.killProcess(process)
+                        }
+                    }
                 }
             }
         }
@@ -235,9 +253,20 @@ struct MenuBarView: View {
                 icon: "eye.fill"
             )
 
-            ForEach(monitor.suspectProcesses) { process in
-                ProcessRowView(process: process, isZombie: false) {
-                    monitor.killProcess(process)
+            let groups = monitor.suspectProcesses.grouped()
+            ForEach(groups) { group in
+                if group.count == 1 {
+                    ProcessRowView(process: group.processes[0], isZombie: false) {
+                        monitor.killProcess(group.processes[0])
+                    }
+                } else {
+                    ProcessGroupRowView(group: group, isZombie: false) { process in
+                        monitor.killProcess(process)
+                    } onKillGroup: {
+                        for process in group.processes {
+                            monitor.killProcess(process)
+                        }
+                    }
                 }
             }
         }
@@ -280,12 +309,21 @@ struct MenuBarView: View {
 
     private var footerSection: some View {
         HStack {
-            Button {
-                Task { await monitor.scan() }
-            } label: {
-                Label("Scan Now", systemImage: "arrow.clockwise")
+            if monitor.isScanning {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Scanning...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Button {
+                    Task { await monitor.scan() }
+                } label: {
+                    Label("Scan Now", systemImage: "arrow.clockwise")
+                }
             }
-            .disabled(monitor.isScanning)
 
             Spacer()
 
@@ -322,5 +360,88 @@ struct MenuBarView: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 4)
+    }
+}
+
+// MARK: - Process Group Row
+
+struct ProcessGroupRowView: View {
+    let group: ProcessGroup
+    let isZombie: Bool
+    var onKill: (DevProcess) -> Void
+    var onKillGroup: () -> Void
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Group header - clickable to expand/collapse
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+
+                    Circle()
+                        .fill(isZombie ? .red : .orange)
+                        .frame(width: 6, height: 6)
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 4) {
+                            Text(group.name)
+                                .font(.system(.caption, weight: .medium))
+                            Text("(\(group.count))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let project = group.projectName {
+                            Text(project)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(String(format: "%.0f%% CPU", group.totalCPU))
+                            .font(.caption2)
+                            .foregroundStyle(group.maxCPU >= 50 ? .orange : .secondary)
+                        Text(String(format: "%.0f MB", group.totalMemoryMB))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    // Kill group button
+                    Button {
+                        onKillGroup()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 14))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Kill all \(group.count) \(group.name) processes")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            // Expanded: show individual processes
+            if isExpanded {
+                ForEach(group.processes) { process in
+                    ProcessRowView(process: process, isZombie: isZombie) {
+                        onKill(process)
+                    }
+                    .padding(.leading, 18)
+                }
+            }
+        }
     }
 }

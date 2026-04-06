@@ -8,6 +8,30 @@ struct ProcessRule: Identifiable, Codable, Hashable {
     var maxRuntime: TimeInterval // Seconds — hard kill limit (0 = no limit). Exceeding this → zombie.
     var action: RuleAction
     var isEnabled: Bool
+    var onlyWhenOrphan: Bool
+
+    init(id: UUID, pattern: String, cpuThreshold: Double, runtimeThreshold: TimeInterval, maxRuntime: TimeInterval, action: RuleAction, isEnabled: Bool, onlyWhenOrphan: Bool = false) {
+        self.id = id
+        self.pattern = pattern
+        self.cpuThreshold = cpuThreshold
+        self.runtimeThreshold = runtimeThreshold
+        self.maxRuntime = maxRuntime
+        self.action = action
+        self.isEnabled = isEnabled
+        self.onlyWhenOrphan = onlyWhenOrphan
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        pattern = try container.decode(String.self, forKey: .pattern)
+        cpuThreshold = try container.decode(Double.self, forKey: .cpuThreshold)
+        runtimeThreshold = try container.decode(TimeInterval.self, forKey: .runtimeThreshold)
+        maxRuntime = try container.decode(TimeInterval.self, forKey: .maxRuntime)
+        action = try container.decode(RuleAction.self, forKey: .action)
+        isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        onlyWhenOrphan = try container.decodeIfPresent(Bool.self, forKey: .onlyWhenOrphan) ?? false
+    }
 
     enum RuleAction: String, Codable, CaseIterable {
         case whitelist = "whitelist"
@@ -40,6 +64,7 @@ struct ProcessRule: Identifiable, Codable, Hashable {
     func isTriggered(by process: DevProcess) -> Bool {
         guard matches(process) else { return false }
         guard action == .warn else { return false }
+        if onlyWhenOrphan && !process.isOrphan { return false }
 
         let cpuExceeded = process.cpuPercent >= cpuThreshold
         let runtimeExceeded = (process.runtime ?? 0) >= runtimeThreshold
@@ -51,6 +76,7 @@ struct ProcessRule: Identifiable, Codable, Hashable {
     func isMaxRuntimeExceeded(by process: DevProcess) -> Bool {
         guard matches(process) else { return false }
         guard maxRuntime > 0 else { return false }
+        if onlyWhenOrphan && !process.isOrphan { return false }
         return (process.runtime ?? 0) >= maxRuntime
     }
 
@@ -86,7 +112,7 @@ struct ProcessRule: Identifiable, Codable, Hashable {
             rule("react-email",     warn: (cpu: 0, rt: 3600),  kill: 7200),  // 2h
 
             // ── MCP Servers ──
-            rule("mcp",             warn: (cpu: 0, rt: 7200),  kill: 14400), // 4h
+            rule("mcp",             warn: (cpu: 0, rt: 7200),  kill: 14400, onlyWhenOrphan: true), // 4h
 
             // ── Package Managers ──
             rule("pnpm",            warn: (cpu: 0, rt: 900),   kill: 1800),  // 30min
@@ -98,7 +124,8 @@ struct ProcessRule: Identifiable, Codable, Hashable {
     private static func rule(
         _ pattern: String,
         warn: (cpu: Double, rt: TimeInterval),
-        kill maxRuntime: TimeInterval
+        kill maxRuntime: TimeInterval,
+        onlyWhenOrphan: Bool = false
     ) -> ProcessRule {
         ProcessRule(
             id: UUID(),
@@ -107,7 +134,8 @@ struct ProcessRule: Identifiable, Codable, Hashable {
             runtimeThreshold: warn.rt,
             maxRuntime: maxRuntime,
             action: .warn,
-            isEnabled: true
+            isEnabled: true,
+            onlyWhenOrphan: onlyWhenOrphan
         )
     }
 }

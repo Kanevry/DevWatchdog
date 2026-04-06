@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		F1TESTS0000000000000011 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000030 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000010;
+			remoteInfo = DevWatchdog;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		A10000000000000000000001 /* DevWatchdog.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DevWatchdog.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1TESTS0000000000000002 /* DevWatchdogTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DevWatchdogTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -29,10 +40,22 @@
 			path = DevWatchdog;
 			sourceTree = "<group>";
 		};
+		F1TESTS0000000000000003 /* DevWatchdogTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DevWatchdogTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A10000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F1TESTS0000000000000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -46,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000003 /* DevWatchdog */,
+				F1TESTS0000000000000003 /* DevWatchdogTests */,
 				A10000000000000000000008 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000001 /* DevWatchdog.app */,
+				F1TESTS0000000000000002 /* DevWatchdogTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,6 +108,29 @@
 			productReference = A10000000000000000000001 /* DevWatchdog.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F1TESTS0000000000000010 /* DevWatchdogTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F1TESTS0000000000000020 /* Build configuration list for PBXNativeTarget "DevWatchdogTests" */;
+			buildPhases = (
+				F1TESTS0000000000000004 /* Sources */,
+				F1TESTS0000000000000005 /* Frameworks */,
+				F1TESTS0000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F1TESTS0000000000000012 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F1TESTS0000000000000003 /* DevWatchdogTests */,
+			);
+			name = DevWatchdogTests;
+			packageProductDependencies = (
+			);
+			productName = DevWatchdogTests;
+			productReference = F1TESTS0000000000000002 /* DevWatchdogTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -95,6 +143,10 @@
 				TargetAttributes = {
 					A10000000000000000000010 = {
 						CreatedOnToolsVersion = 16.2;
+					};
+					F1TESTS0000000000000010 = {
+						CreatedOnToolsVersion = 16.2;
+						TestTargetID = A10000000000000000000010;
 					};
 				};
 			};
@@ -113,12 +165,20 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000010 /* DevWatchdog */,
+				F1TESTS0000000000000010 /* DevWatchdogTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A10000000000000000000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F1TESTS0000000000000006 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +195,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F1TESTS0000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F1TESTS0000000000000012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000010 /* DevWatchdog */;
+			targetProxy = F1TESTS0000000000000011 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000050 /* Debug */ = {
@@ -267,7 +342,7 @@
 				CODE_SIGN_ENTITLEMENTS = DevWatchdog/DevWatchdog.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -297,7 +372,7 @@
 				CODE_SIGN_ENTITLEMENTS = DevWatchdog/DevWatchdog.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -320,6 +395,44 @@
 			};
 			name = Release;
 		};
+		F1TESTS0000000000000060 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = at.kanevry.DevWatchdogTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DevWatchdog.app/Contents/MacOS/DevWatchdog";
+			};
+			name = Debug;
+		};
+		F1TESTS0000000000000061 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = at.kanevry.DevWatchdogTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DevWatchdog.app/Contents/MacOS/DevWatchdog";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -337,6 +450,15 @@
 			buildConfigurations = (
 				A10000000000000000000050 /* Debug */,
 				A10000000000000000000051 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F1TESTS0000000000000020 /* Build configuration list for PBXNativeTarget "DevWatchdogTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F1TESTS0000000000000060 /* Debug */,
+				F1TESTS0000000000000061 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

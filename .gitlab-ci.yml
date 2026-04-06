@@ -5,6 +5,7 @@
 
 stages:
   - build
+  - test
 
 variables:
   SCHEME: DevWatchdog
@@ -31,6 +32,25 @@ build:
     paths:
       - build/Build/Products/Release/DevWatchdog.app
     expire_in: 7 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+test:
+  tags:
+    - macbook-swift
+  stage: test
+  script:
+    - xcodebuild
+        -project ${PROJECT}
+        -scheme ${SCHEME}
+        -configuration Debug
+        -derivedDataPath build
+        -destination "${DESTINATION}"
+        CODE_SIGN_IDENTITY=""
+        CODE_SIGNING_REQUIRED=NO
+        test
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"

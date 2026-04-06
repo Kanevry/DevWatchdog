@@ -1,13 +1,22 @@
 import Foundation
 
+enum KillResult: Sendable {
+    case success
+    case alreadyDead
+    case permissionDenied
+    case failed(errno: Int32)
+}
+
 final class ProcessKiller: Sendable {
     /// Kill a process. First sends SIGTERM, waits 5 seconds, then SIGKILL if still alive.
-    func kill(pid: Int32) {
+    func kill(pid: Int32) -> KillResult {
         // First try SIGTERM (graceful)
         let termResult = Foundation.kill(pid, SIGTERM)
         if termResult != 0 {
-            // Process might already be dead or we lack permission
-            return
+            let err = errno
+            if err == ESRCH { return .alreadyDead }
+            if err == EPERM { return .permissionDenied }
+            return .failed(errno: err)
         }
 
         // Check after 5 seconds if still alive, then SIGKILL
@@ -16,6 +25,7 @@ final class ProcessKiller: Sendable {
                 Foundation.kill(pid, SIGKILL)
             }
         }
+        return .success
     }
 
     /// Force kill immediately with SIGKILL (no grace period)

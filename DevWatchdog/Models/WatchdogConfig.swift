@@ -30,6 +30,18 @@ class WatchdogConfig: ObservableObject {
     @Published var catchAllMaxRuntime: TimeInterval {
         didSet { defaults.set(catchAllMaxRuntime, forKey: "catchAllMaxRuntime") }
     }
+    @Published var excludedApps: [String] {
+        didSet { saveExcludedApps() }
+    }
+
+    static let defaultExcludedApps = [
+        "/Notion.app/", "/Slack.app/", "/Discord.app/",
+        "/Spotify.app/", "/Figma.app/", "/1Password.app/",
+        "/Microsoft", "/Linear.app/", "/Obsidian.app/",
+        "/WhatsApp.app/", "/Telegram.app/", "/Signal.app/",
+        "/zoom.us.app/", "/Google Chrome.app/", "/Firefox.app/",
+        "/Safari.app/", "/Arc.app/", "/Brave Browser.app/",
+    ]
 
     init() {
         let d = UserDefaults.standard
@@ -47,6 +59,14 @@ class WatchdogConfig: ObservableObject {
             self.rules = decoded
         } else {
             self.rules = ProcessRule.defaultRules
+        }
+
+        // Load excluded apps
+        if let data = d.data(forKey: "excludedApps"),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            self.excludedApps = decoded
+        } else {
+            self.excludedApps = Self.defaultExcludedApps
         }
     }
 
@@ -69,6 +89,13 @@ class WatchdogConfig: ObservableObject {
         catchAllMaxRuntime = 28800
         rules = ProcessRule.defaultRules
         soundOnCritical = true
+        excludedApps = Self.defaultExcludedApps
+    }
+
+    private func saveExcludedApps() {
+        if let data = try? JSONEncoder().encode(excludedApps) {
+            defaults.set(data, forKey: "excludedApps")
+        }
     }
 
     private func saveRules() {

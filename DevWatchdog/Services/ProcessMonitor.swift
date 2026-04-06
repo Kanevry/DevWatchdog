@@ -11,19 +11,30 @@ class ProcessMonitor: ObservableObject {
     @Published var totalCPU: Double = 0
     @Published var totalMemoryMB: Double = 0
     @Published var isScanning = false
+    @Published var lastError: String?
 
     private var timer: Timer?
     private var config: WatchdogConfig?
+    private var cancellables = Set<AnyCancellable>()
     private let killer = ProcessKiller()
     private let notificationService = NotificationService()
 
-    // Track processes pending auto-kill (PID -> first seen time)
-    private var pendingKills: [Int32: Date] = [:]
+    // Track processes pending auto-kill (PID -> first seen time + snapshotted grace period)
+    private var pendingKills: [Int32: (firstSeen: Date, gracePeriod: TimeInterval)] = [:]
     // Track which zombie batches we already notified about (to avoid repeat alerts)
     private var notifiedZombiePIDs: Set<Int32> = []
 
     func start(config: WatchdogConfig) {
         self.config = config
+
+        // Reschedule timer whenever scanInterval changes
+        config.$scanInterval
+            .removeDuplicates()
+            .dropFirst() // Skip the initial value (we already schedule below)
+            .sink { [weak self] _ in
+                self?.scheduleTimer()
+            }
+            .store(in: &cancellables)
 
         // Request notification permission
         Task {
@@ -39,6 +50,7 @@ class ProcessMonitor: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        cancellables.removeAll()
         pendingKills.removeAll()
         notifiedZombiePIDs.removeAll()
     }
@@ -49,8 +61,9 @@ class ProcessMonitor: ObservableObject {
         isScanning = true
         defer { isScanning = false }
 
+        let excludedApps = config?.excludedApps ?? WatchdogConfig.defaultExcludedApps
         let processes = await Task.detached {
-            PSParser.parseProcessList()
+            PSParser.parseProcessList(excludedApps: excludedApps)
         }.value
 
         guard let config else { return }
@@ -91,9 +104,14 @@ class ProcessMonitor: ObservableObject {
             if config.catchAllMaxRuntime > 0 && runtime >= config.catchAllMaxRuntime {
                 // Any dev process running longer than catch-all limit → zombie
                 zombies.append(process)
-            } else if process.cpuPercent > 50 || runtime > 600 {
+            } else if process.isOrphan {
+                // Orphan below orphanTimeout — still suspicious if running a while
+                if runtime > 300 { suspects.append(process) }
+            } else if process.cpuPercent > 80 {
+                // Non-orphan with very high CPU — worth flagging
                 suspects.append(process)
             }
+            // Non-orphan, normal CPU, no rule match → skip (parent alive, likely intentional)
         }
 
         // Sort: most obvious kill candidates first
@@ -109,12 +127,15 @@ class ProcessMonitor: ObservableObject {
             return ($0.runtime ?? 0) > ($1.runtime ?? 0)
         }
 
-        self.allProcesses = processes
-        self.zombieProcesses = zombies
-        self.suspectProcesses = suspects
-        self.whitelistedProcesses = whitelisted
-        self.totalCPU = processes.reduce(0) { $0 + $1.cpuPercent }
-        self.totalMemoryMB = processes.reduce(0) { $0 + $1.memoryMB }
+        if processes != self.allProcesses { self.allProcesses = processes }
+        if zombies != self.zombieProcesses { self.zombieProcesses = zombies }
+        if suspects != self.suspectProcesses { self.suspectProcesses = suspects }
+        if whitelisted != self.whitelistedProcesses { self.whitelistedProcesses = whitelisted }
+
+        let newTotalCPU = processes.reduce(0) { $0 + $1.cpuPercent }
+        let newTotalMemoryMB = processes.reduce(0) { $0 + $1.memoryMB }
+        if newTotalCPU != self.totalCPU { self.totalCPU = newTotalCPU }
+        if newTotalMemoryMB != self.totalMemoryMB { self.totalMemoryMB = newTotalMemoryMB }
         self.lastScan = Date()
 
         // Handle auto-kill with grace period
@@ -122,13 +143,32 @@ class ProcessMonitor: ObservableObject {
     }
 
     func killProcess(_ process: DevProcess) {
-        killer.kill(pid: process.pid)
-        // Remove from lists immediately
-        zombieProcesses.removeAll { $0.id == process.id }
-        suspectProcesses.removeAll { $0.id == process.id }
-        allProcesses.removeAll { $0.id == process.id }
-        pendingKills.removeValue(forKey: process.pid)
-        notifiedZombiePIDs.remove(process.pid)
+        let result = killer.kill(pid: process.pid)
+        switch result {
+        case .success, .alreadyDead:
+            zombieProcesses.removeAll { $0.id == process.id }
+            suspectProcesses.removeAll { $0.id == process.id }
+            allProcesses.removeAll { $0.id == process.id }
+            pendingKills.removeValue(forKey: process.pid)
+            notifiedZombiePIDs.remove(process.pid)
+        case .permissionDenied:
+            lastError = "Permission denied for PID \(process.pid)"
+            Task {
+                await notificationService.send(
+                    title: "Kill failed",
+                    body: "Permission denied for \(process.processName) (PID \(process.pid))."
+                )
+            }
+        case .failed(let err):
+            lastError = "Kill failed for PID \(process.pid) (errno: \(err))"
+        }
+        // Clear error after 5 seconds
+        if lastError != nil {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.lastError = nil
+            }
+        }
     }
 
     func killAllZombies() {
@@ -136,7 +176,7 @@ class ProcessMonitor: ObservableObject {
         let count = zombieProcesses.count
 
         for process in zombieProcesses {
-            killer.kill(pid: process.pid)
+            _ = killer.kill(pid: process.pid)
         }
         zombieProcesses.removeAll()
         pendingKills.removeAll()
@@ -154,7 +194,7 @@ class ProcessMonitor: ObservableObject {
         let count = suspectProcesses.count
 
         for process in suspectProcesses {
-            killer.kill(pid: process.pid)
+            _ = killer.kill(pid: process.pid)
         }
         suspectProcesses.removeAll()
         allProcesses.removeAll { p in !zombieProcesses.contains(where: { $0.id == p.id }) && !whitelistedProcesses.contains(where: { $0.id == p.id }) }
@@ -210,9 +250,9 @@ class ProcessMonitor: ObservableObject {
         var freedMemory = 0.0
 
         for zombie in zombies {
-            if let firstSeen = pendingKills[zombie.pid] {
-                if now.timeIntervalSince(firstSeen) >= config.gracePeriod {
-                    killer.kill(pid: zombie.pid)
+            if let entry = pendingKills[zombie.pid] {
+                if now.timeIntervalSince(entry.firstSeen) >= entry.gracePeriod {
+                    _ = killer.kill(pid: zombie.pid)
                     pendingKills.removeValue(forKey: zombie.pid)
                     notifiedZombiePIDs.remove(zombie.pid)
                     killedCount += 1
@@ -221,7 +261,7 @@ class ProcessMonitor: ObservableObject {
                 // else: still within grace period, wait
             } else {
                 // First time seeing this zombie — start grace period
-                pendingKills[zombie.pid] = now
+                pendingKills[zombie.pid] = (firstSeen: now, gracePeriod: config.gracePeriod)
             }
         }
 
@@ -249,6 +289,7 @@ enum PSParser: Sendable {
     struct PSParsed: Sendable {
         let user: String
         let pid: Int32
+        let ppid: Int32
         let cpu: Double
         let mem: Double
         let rss: Int
@@ -256,17 +297,7 @@ enum PSParser: Sendable {
         let startTime: Date?
     }
 
-    // Known non-dev Electron/desktop apps to exclude
-    private static let excludedApps = [
-        "/Notion.app/", "/Slack.app/", "/Discord.app/",
-        "/Spotify.app/", "/Figma.app/", "/1Password.app/",
-        "/Microsoft", "/Linear.app/", "/Obsidian.app/",
-        "/WhatsApp.app/", "/Telegram.app/", "/Signal.app/",
-        "/zoom.us.app/", "/Google Chrome.app/", "/Firefox.app/",
-        "/Safari.app/", "/Arc.app/", "/Brave Browser.app/",
-    ]
-
-    static func parseProcessList() -> [DevProcess] {
+    static func parseProcessList(excludedApps: [String]) -> [DevProcess] {
         let pipe = Pipe()
         let process = Process()
 
@@ -278,7 +309,7 @@ enum PSParser: Sendable {
         }
 
         process.executableURL = psURL
-        process.arguments = ["aux"]
+        process.arguments = ["-eo", "user=,pid=,ppid=,%cpu=,%mem=,rss=,start=,args="]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
 
@@ -295,13 +326,12 @@ enum PSParser: Sendable {
         guard let output = String(data: data, encoding: .utf8) else { return [] }
 
         let lines = output.components(separatedBy: "\n")
-        guard lines.count > 1 else { return [] }
+        guard !lines.isEmpty else { return [] }
 
         var results: [DevProcess] = []
         let currentUser = NSUserName()
 
-        // Skip header line
-        for line in lines.dropFirst() {
+        for line in lines {
             guard !line.isEmpty else { continue }
             guard let parsed = parsePSLine(line) else { continue }
 
@@ -341,7 +371,7 @@ enum PSParser: Sendable {
             }
 
             // Check if orphan (parent PID = 1 means adopted by launchd)
-            let parentPID = getParentPID(parsed.pid)
+            let parentPID = parsed.ppid
             let isOrphan = parentPID == 1
 
             let devProcess = DevProcess(
@@ -362,24 +392,26 @@ enum PSParser: Sendable {
     }
 
     static func parsePSLine(_ line: String) -> PSParsed? {
-        // ps aux format: USER PID %CPU %MEM VSZ RSS TT STAT STARTED TIME COMMAND
-        // Split by whitespace, but command can contain spaces
-        let components = line.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: true)
-        guard components.count >= 11 else { return nil }
+        // ps -eo format: USER PID PPID %CPU %MEM RSS STARTED ARGS
+        // Split by whitespace, but args (command) can contain spaces
+        let components = line.split(separator: " ", maxSplits: 7, omittingEmptySubsequences: true)
+        guard components.count >= 8 else { return nil }
 
         guard let pid = Int32(components[1]) else { return nil }
-        let cpu = Double(components[2]) ?? 0
-        let mem = Double(components[3]) ?? 0
+        guard let ppid = Int32(components[2]) else { return nil }
+        let cpu = Double(components[3]) ?? 0
+        let mem = Double(components[4]) ?? 0
         let rss = Int(components[5]) ?? 0
-        let command = String(components[10])
+        let command = String(components[7])
 
-        // Parse STARTED (column 8) - format varies: "HH:MM" or "MonDD" or "YYYY"
-        let startedStr = String(components[8])
+        // Parse STARTED (column 6) - format varies: "HH:MM" or "MonDD" or "YYYY"
+        let startedStr = String(components[6])
         let startTime = parseStartTime(startedStr)
 
         return PSParsed(
             user: String(components[0]),
             pid: pid,
+            ppid: ppid,
             cpu: cpu,
             mem: mem,
             rss: rss,
@@ -436,25 +468,4 @@ enum PSParser: Sendable {
         return nil
     }
 
-    static func getParentPID(_ pid: Int32) -> Int32 {
-        let pipe = Pipe()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-o", "ppid=", "-p", "\(pid)"]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               let ppid = Int32(str) {
-                return ppid
-            }
-        } catch {
-            // ignore
-        }
-        return 0
-    }
 }

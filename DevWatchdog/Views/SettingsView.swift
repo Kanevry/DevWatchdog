@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var config: WatchdogConfig
     @State private var newRulePattern = ""
     @State private var showingResetConfirmation = false
+    @State private var newExcludedApp = ""
 
     var body: some View {
         TabView {
@@ -100,6 +101,39 @@ struct SettingsView: View {
 
             Section("System") {
                 Toggle("Launch at login", isOn: $config.launchAtLogin)
+            }
+
+            Section("Excluded Apps") {
+                Text("Processes from these apps are never shown as suspects.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                ForEach(config.excludedApps, id: \.self) { app in
+                    HStack {
+                        Text(app)
+                            .font(.system(.caption, design: .monospaced))
+                        Spacer()
+                        Button {
+                            config.excludedApps.removeAll { $0 == app }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack {
+                    TextField("e.g. /MyApp.app/", text: $newExcludedApp)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                    Button("Add") {
+                        guard !newExcludedApp.isEmpty else { return }
+                        config.excludedApps.append(newExcludedApp)
+                        newExcludedApp = ""
+                    }
+                    .disabled(newExcludedApp.isEmpty)
+                }
             }
 
             Section {
