@@ -114,6 +114,13 @@ struct ProcessRule: Identifiable, Codable, Hashable {
             // ── MCP Servers ──
             rule("mcp",             warn: (cpu: 0, rt: 7200),  kill: 14400, onlyWhenOrphan: true), // 4h
 
+            // ── Runtimes ──
+            rule("bun",             warn: (cpu: 0, rt: 600),   kill: 1200),  // 20min
+            rule("deno",            warn: (cpu: 0, rt: 600),   kill: 1200),  // 20min
+
+            // ── Compilers ──
+            rule("swc",             warn: (cpu: 0, rt: 600),   kill: 1200),  // 20min
+
             // ── Package Managers ──
             rule("pnpm",            warn: (cpu: 0, rt: 900),   kill: 1800),  // 30min
             rule("npm run",         warn: (cpu: 0, rt: 900),   kill: 1800),  // 30min

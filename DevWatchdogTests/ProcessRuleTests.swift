@@ -123,4 +123,55 @@ final class ProcessRuleTests: XCTestCase {
         let process = makeProcess(startTime: Date().addingTimeInterval(-3600))
         XCTAssertFalse(rule.isMaxRuntimeExceeded(by: process))
     }
+
+    // MARK: - Default rules for new tools
+
+    func testDefaultRulesContainBun() {
+        let bunRule = ProcessRule.defaultRules.first { $0.pattern == "bun" }
+        XCTAssertNotNil(bunRule, "defaultRules should contain a 'bun' rule")
+        XCTAssertEqual(bunRule?.runtimeThreshold, 600)
+        XCTAssertEqual(bunRule?.maxRuntime, 1200)
+    }
+
+    func testDefaultRulesContainDeno() {
+        let denoRule = ProcessRule.defaultRules.first { $0.pattern == "deno" }
+        XCTAssertNotNil(denoRule, "defaultRules should contain a 'deno' rule")
+        XCTAssertEqual(denoRule?.runtimeThreshold, 600)
+        XCTAssertEqual(denoRule?.maxRuntime, 1200)
+    }
+
+    func testDefaultRulesContainSwc() {
+        let swcRule = ProcessRule.defaultRules.first { $0.pattern == "swc" }
+        XCTAssertNotNil(swcRule, "defaultRules should contain a 'swc' rule")
+        XCTAssertEqual(swcRule?.runtimeThreshold, 600)
+        XCTAssertEqual(swcRule?.maxRuntime, 1200)
+    }
+
+    // MARK: - Matching behavior for new tools
+
+    func testBunRuleMatchesBunCommand() {
+        let rule = makeRule(pattern: "bun")
+        let process = makeProcess(command: "/usr/local/bin/bun run dev")
+        XCTAssertTrue(rule.matches(process))
+    }
+
+    func testDenoRuleMatchesDenoCommand() {
+        let rule = makeRule(pattern: "deno")
+        let process = makeProcess(command: "/home/user/.deno/bin/deno run server.ts")
+        XCTAssertTrue(rule.matches(process))
+    }
+
+    func testSwcRuleMatchesSwcCommand() {
+        let rule = makeRule(pattern: "swc")
+        let process = makeProcess(command: "/usr/local/bin/swc compile src/")
+        XCTAssertTrue(rule.matches(process))
+    }
+
+    // MARK: - Case sensitivity edge cases
+
+    func testMatchesIsCaseInsensitiveForNewTools() {
+        let bunRule = makeRule(pattern: "BUN")
+        let process = makeProcess(command: "/usr/local/bin/bun run dev")
+        XCTAssertTrue(bunRule.matches(process), "Rule matching should be case-insensitive")
+    }
 }

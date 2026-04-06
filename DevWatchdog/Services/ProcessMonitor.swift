@@ -347,7 +347,8 @@ enum PSParser: Sendable {
                 cmd.contains("mcp") || cmd.contains("pnpm") || cmd.contains("npm run") ||
                 cmd.contains("yarn") || cmd.contains("playwright") ||
                 cmd.contains("ms-playwright") || cmd.contains("percy") ||
-                cmd.contains("react-email")
+                cmd.contains("react-email") || cmd.contains("bun") ||
+                cmd.contains("deno") || cmd.contains("swc")
 
             guard isDevProcess else { continue }
 

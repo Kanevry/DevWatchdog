@@ -176,4 +176,40 @@ final class ClassificationTests: XCTestCase {
         // cpuPercent 10 <= 50 and runtime 30 <= 600 -> none
         XCTAssertEqual(result, .none)
     }
+
+    // MARK: - processName for new tools
+
+    func testBunProcessName() {
+        let process = makeProcess(command: "/usr/local/bin/bun run dev")
+        XCTAssertEqual(process.processName, "bun")
+    }
+
+    func testDenoProcessName() {
+        let process = makeProcess(command: "/usr/local/bin/deno run server.ts")
+        XCTAssertEqual(process.processName, "deno")
+    }
+
+    func testSwcProcessName() {
+        let process = makeProcess(command: "/usr/local/bin/swc compile src/")
+        XCTAssertEqual(process.processName, "swc")
+    }
+
+    // MARK: - processName edge cases
+
+    func testEmptyCommandFallsBackToNode() {
+        let process = makeProcess(command: "")
+        XCTAssertEqual(process.processName, "node")
+    }
+
+    func testVeryLongCommandStillClassifies() {
+        let longArgs = String(repeating: "--flag=value ", count: 500)
+        let process = makeProcess(command: "/usr/local/bin/bun run \(longArgs)")
+        XCTAssertEqual(process.processName, "bun")
+    }
+
+    func testCommandWithMultipleKeywordsUsesFirstMatch() {
+        // "bun run vitest" — vitest appears before bun in the processName checks
+        let process = makeProcess(command: "/usr/local/bin/bun run vitest --reporter verbose")
+        XCTAssertEqual(process.processName, "vitest")
+    }
 }

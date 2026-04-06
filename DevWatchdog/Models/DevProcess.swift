@@ -113,6 +113,15 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         if cmd.contains("pnpm") || cmd.contains("npm") || cmd.contains("yarn") {
             return "package manager"
         }
+        if cmd.contains("bun") {
+            return "bun"
+        }
+        if cmd.contains("deno") {
+            return "deno"
+        }
+        if cmd.contains("swc") {
+            return "swc"
+        }
 
         // Fallback: last path component of first arg
         let parts = cmd.split(separator: " ")

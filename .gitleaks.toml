@@ -1,0 +1,10 @@
+title = "DevWatchdog gitleaks config"
+description = "Gitleaks configuration for the DevWatchdog macOS app"
+
+[allowlist]
+  description = "Global allowlist"
+  paths = [
+    '''DevWatchdogTests/.*''',
+    '''.*\.xcodeproj/.*''',
+    '''docs/.*''',
+  ]
