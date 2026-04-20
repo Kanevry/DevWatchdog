@@ -40,3 +40,15 @@ xcodebuild -project DevWatchdog.xcodeproj -scheme DevWatchdog -destination 'plat
 - Swift 6 strict concurrency — all types must be `Sendable`-safe
 - SwiftUI for all UI; no AppKit unless necessary
 - Menu bar app architecture (no main window)
+
+## Session Config
+
+test-command: xcodebuild -project DevWatchdog.xcodeproj -scheme DevWatchdog -destination 'platform=macOS' test
+typecheck-command: xcodebuild -project DevWatchdog.xcodeproj -scheme DevWatchdog -destination 'platform=macOS' build
+lint-command: true
+agents-per-wave: 4
+waves: 5
+persistence: true
+enforcement: warn
+isolation: auto
+
