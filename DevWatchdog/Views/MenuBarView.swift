@@ -3,12 +3,34 @@ import SwiftUI
 struct MenuBarView: View {
     @ObservedObject var monitor: ProcessMonitor
     @ObservedObject var config: WatchdogConfig
+    var panicAction: PanicAction?
     var openSettings: () -> Void
+
+    @State private var showPanicConfirm = false
+    @State private var showOnboarding = !UserDefaults.standard.bool(
+        forKey: EmergencyOnboardingView.hasSeenKey
+    )
+    @State private var showSessionLog = false
+
+    /// Threshold above which the Panic button shows a confirmation alert.
+    private let panicConfirmThreshold = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             headerSection
+
+            // Emergency banner — only while in .emergency
+            if monitor.emergencyState == .emergency {
+                EmergencyBannerView(monitor: monitor)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+
+            // System pressure meter — whenever a snapshot is available
+            if monitor.pressure != nil {
+                Divider()
+                PressureMeterView(monitor: monitor)
+            }
 
             Divider()
 
@@ -47,6 +69,15 @@ struct MenuBarView: View {
             footerSection
         }
         .frame(width: 380)
+        .animation(.easeInOut(duration: 0.25), value: monitor.emergencyState)
+        .animation(.easeInOut(duration: 0.25), value: monitor.pressure != nil)
+        .sheet(isPresented: $showOnboarding) {
+            EmergencyOnboardingView(isPresented: $showOnboarding)
+        }
+        .sheet(isPresented: $showSessionLog) {
+            SessionLogView(log: monitor.sessionLog)
+                .frame(width: 560, height: 620)
+        }
     }
 
     private var dynamicMaxHeight: CGFloat {
@@ -77,24 +108,113 @@ struct MenuBarView: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 6, height: 6)
-                    Text("Auto-Kill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                if hasPanicTargets {
+                    panicButton
                 }
-                if let lastScan = monitor.lastScan {
-                    Text("Scanned \(lastScan, style: .relative) ago")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    emergencyStatePill
+                    if let lastScan = monitor.lastScan {
+                        Text("Scanned \(lastScan, style: .relative) ago")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .alert("Panic aktivieren?", isPresented: $showPanicConfirm) {
+            Button("Abbrechen", role: .cancel) { }
+            Button("Ja, alle beenden", role: .destructive) {
+                runPanic()
+            }
+            .keyboardShortcut(.return, modifiers: [.command])
+        } message: {
+            Text(panicConfirmMessage)
+        }
+    }
+
+    // MARK: - Panic Button
+
+    private var panicTargetCount: Int {
+        monitor.zombieProcesses.count + monitor.suspectProcesses.count
+    }
+
+    private var hasPanicTargets: Bool {
+        panicTargetCount > 0
+    }
+
+    private var panicConfirmMessage: String {
+        let mode = config.softKillPreferred ? "pausiert/beendet" : "beendet"
+        return "\(panicTargetCount) Prozesse werden \(mode)."
+    }
+
+    private var panicButton: some View {
+        Button {
+            if panicTargetCount > panicConfirmThreshold {
+                showPanicConfirm = true
+            } else {
+                runPanic()
+            }
+        } label: {
+            Label("Panic", systemImage: "bolt.fill")
+                .font(.caption)
+                .fontWeight(.semibold)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.red)
+        .controlSize(.small)
+        .help("Alle Zombies und Verdächtigen sofort beenden (⌘⇧⌥P).")
+        .accessibilityLabel("Panic — \(panicTargetCount) Prozesse beenden")
+    }
+
+    private func runPanic() {
+        _ = panicAction?.execute()
+    }
+
+    // MARK: - Emergency state pill
+
+    @ViewBuilder
+    private var emergencyStatePill: some View {
+        switch monitor.emergencyState {
+        case .emergency:
+            // Phase-animator pulses opacity without needing a TimelineView frame loop.
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 6, height: 6)
+                Text("EMERGENCY")
+                    .font(.caption2)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.red)
+            }
+            .phaseAnimator([0.55, 1.0]) { content, phase in
+                content.opacity(phase)
+            } animation: { _ in
+                .easeInOut(duration: 0.6)
+            }
+        case .elevated:
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 6, height: 6)
+                Text("Elevated")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.orange)
+            }
+        case .normal:
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                Text("Auto-Kill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     // MARK: - Sticky Action Bar
@@ -226,9 +346,13 @@ struct MenuBarView: View {
             let groups = monitor.zombieProcesses.grouped()
             ForEach(groups) { group in
                 if group.count == 1 {
-                    ProcessRowView(process: group.processes[0], isZombie: true) {
-                        monitor.killProcess(group.processes[0])
-                    }
+                    ProcessRowView(
+                        process: group.processes[0],
+                        isZombie: true,
+                        onKill: { monitor.killProcess(group.processes[0]) },
+                        onThrottle: { monitor.throttleProcess(group.processes[0]) },
+                        onResume: { monitor.resumeProcess(group.processes[0]) }
+                    )
                 } else {
                     ProcessGroupRowView(group: group, isZombie: true) { process in
                         monitor.killProcess(process)
@@ -256,9 +380,13 @@ struct MenuBarView: View {
             let groups = monitor.suspectProcesses.grouped()
             ForEach(groups) { group in
                 if group.count == 1 {
-                    ProcessRowView(process: group.processes[0], isZombie: false) {
-                        monitor.killProcess(group.processes[0])
-                    }
+                    ProcessRowView(
+                        process: group.processes[0],
+                        isZombie: false,
+                        onKill: { monitor.killProcess(group.processes[0]) },
+                        onThrottle: { monitor.throttleProcess(group.processes[0]) },
+                        onResume: { monitor.resumeProcess(group.processes[0]) }
+                    )
                 } else {
                     ProcessGroupRowView(group: group, isZombie: false) { process in
                         monitor.killProcess(process)
@@ -326,6 +454,13 @@ struct MenuBarView: View {
             }
 
             Spacer()
+
+            Button {
+                showSessionLog = true
+            } label: {
+                Label("Log", systemImage: "list.bullet.rectangle")
+            }
+            .help("Session-Log öffnen — alle Kill/Pause/Resume-Events dieser Session")
 
             Button {
                 openSettings()

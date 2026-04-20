@@ -76,4 +76,43 @@ final class NotificationService {
             body: "Freed \(String(format: "%.0f", freedMemoryMB)) MB memory."
         )
     }
+
+    // MARK: - Emergency-aware alerts
+
+    /// Critical alert (with sound) emitted exactly once when the monitor
+    /// enters the `.emergency` state. Body reports the pressure signals that
+    /// triggered the transition so the user can judge whether to intervene.
+    func sendEmergencyEnteredAlert(snapshot: SystemPressureSnapshot) async {
+        let loadFactor = String(format: "%.2f", snapshot.loadFactor)
+        let memoryPressure: String
+        switch snapshot.memoryPressure {
+        case .critical: memoryPressure = "Memory kritisch"
+        case .elevated: memoryPressure = "Memory erhöht"
+        case .normal:   memoryPressure = "Memory normal"
+        }
+        let swapGB = String(format: "%.1f", snapshot.swapUsedMB / 1024)
+
+        await send(
+            title: "⚡ Emergency Mode aktiv",
+            body: "Load \(loadFactor)×, \(memoryPressure), \(swapGB) GB Swap. Aggressives Killen aktiviert.",
+            sound: true
+        )
+    }
+
+    /// Info summary emitted when leaving `.emergency` — aggregates everything
+    /// the monitor did during the emergency period so the user gets a single
+    /// "here's what happened" toast instead of a flood of individual kills.
+    func sendEmergencyExitedSummary(
+        duration: TimeInterval,
+        killedCount: Int,
+        throttledCount: Int,
+        freedMemoryMB: Double
+    ) async {
+        let durationSecs = Int(duration.rounded())
+        let freedStr = String(format: "%.0f", freedMemoryMB)
+        await send(
+            title: "Emergency beendet",
+            body: "Dauer: \(durationSecs)s. \(killedCount) gekillt, \(throttledCount) pausiert. \(freedStr) MB frei."
+        )
+    }
 }

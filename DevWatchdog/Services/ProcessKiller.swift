@@ -1,6 +1,7 @@
 import Foundation
+import Darwin
 
-enum KillResult: Sendable {
+enum KillResult: Sendable, Equatable {
     case success
     case alreadyDead
     case permissionDenied
@@ -37,5 +38,34 @@ final class ProcessKiller: Sendable {
     func isProcessAlive(_ pid: Int32) -> Bool {
         // kill with signal 0 checks existence without sending a signal
         return Foundation.kill(pid, 0) == 0
+    }
+
+    /// Freeze a process without killing it: renice to +20 (lowest priority) and SIGSTOP.
+    /// Renice failures are ignored — they are not critical. SIGSTOP errors are reported.
+    func throttle(pid: Int32) -> KillResult {
+        // Best-effort renice. Ignore failures (may fail for processes not owned by user,
+        // and SIGSTOP still matters more than priority).
+        _ = Darwin.setpriority(PRIO_PROCESS, UInt32(bitPattern: pid), 20)
+
+        let result = Foundation.kill(pid, SIGSTOP)
+        if result != 0 {
+            let err = errno
+            if err == ESRCH { return .alreadyDead }
+            if err == EPERM { return .permissionDenied }
+            return .failed(errno: err)
+        }
+        return .success
+    }
+
+    /// Resume a previously throttled/stopped process via SIGCONT.
+    func resume(pid: Int32) -> KillResult {
+        let result = Foundation.kill(pid, SIGCONT)
+        if result != 0 {
+            let err = errno
+            if err == ESRCH { return .alreadyDead }
+            if err == EPERM { return .permissionDenied }
+            return .failed(errno: err)
+        }
+        return .success
     }
 }

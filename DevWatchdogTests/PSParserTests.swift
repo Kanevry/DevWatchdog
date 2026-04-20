@@ -6,7 +6,7 @@ final class PSParserTests: XCTestCase {
     // MARK: - parsePSLine
 
     func testParsesNormalLine() {
-        let line = "  testuser  1234     1  12.3   4.5  51200 9:49AM /usr/local/bin/node server.js"
+        let line = "  testuser  1234     1  12.3   4.5  51200 S 9:49AM /usr/local/bin/node server.js"
         let result = PSParser.parsePSLine(line)
 
         XCTAssertNotNil(result)
@@ -16,11 +16,12 @@ final class PSParserTests: XCTestCase {
         XCTAssertEqual(result?.cpu, 12.3)
         XCTAssertEqual(result?.mem, 4.5)
         XCTAssertEqual(result?.rss, 51200)
+        XCTAssertEqual(result?.state, "S")
         XCTAssertEqual(result?.command, "/usr/local/bin/node server.js")
     }
 
     func testCommandWithSpacesPreservesFullArgs() {
-        let line = "  root  5678  100  80.0   2.0  10240 14:30 /usr/bin/node vitest --forks --reporter verbose"
+        let line = "  root  5678  100  80.0   2.0  10240 R 14:30 /usr/bin/node vitest --forks --reporter verbose"
         let result = PSParser.parsePSLine(line)
 
         XCTAssertNotNil(result)
@@ -36,7 +37,7 @@ final class PSParserTests: XCTestCase {
     }
 
     func testNonNumericPIDReturnsNil() {
-        let line = "  testuser  abc     1  12.3   4.5  51200 9:49AM /usr/bin/node app.js"
+        let line = "  testuser  abc     1  12.3   4.5  51200 S 9:49AM /usr/bin/node app.js"
         XCTAssertNil(PSParser.parsePSLine(line))
     }
 

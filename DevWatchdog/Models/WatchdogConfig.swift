@@ -34,6 +34,30 @@ class WatchdogConfig: ObservableObject {
         didSet { saveExcludedApps() }
     }
 
+    // MARK: - Emergency Mode (issues #4 / #6)
+
+    /// Master switch for Emergency Mode. When false, `ProcessMonitor` uses
+    /// the static `scanInterval` / `gracePeriod` regardless of pressure.
+    @Published var emergencyModeEnabled: Bool {
+        didSet { defaults.set(emergencyModeEnabled, forKey: "emergencyModeEnabled") }
+    }
+    /// `loadFactor` above this promotes the emergency state.
+    @Published var emergencyLoadFactor: Double {
+        didSet { defaults.set(emergencyLoadFactor, forKey: "emergencyLoadFactor") }
+    }
+    /// `loadFactor` above this promotes the elevated state.
+    @Published var elevatedLoadFactor: Double {
+        didSet { defaults.set(elevatedLoadFactor, forKey: "elevatedLoadFactor") }
+    }
+    /// Dwell time required in a lower state before a downward transition is permitted.
+    @Published var emergencyCooldown: TimeInterval {
+        didSet { defaults.set(emergencyCooldown, forKey: "emergencyCooldown") }
+    }
+    /// Hint to prefer SIGSTOP+renice over SIGTERM during emergency triage (Wave 4+).
+    @Published var softKillPreferred: Bool {
+        didSet { defaults.set(softKillPreferred, forKey: "softKillPreferred") }
+    }
+
     static let defaultExcludedApps = [
         "/Notion.app/", "/Slack.app/", "/Discord.app/",
         "/Spotify.app/", "/Figma.app/", "/1Password.app/",
@@ -52,6 +76,18 @@ class WatchdogConfig: ObservableObject {
         self.catchAllMaxRuntime = d.double(forKey: "catchAllMaxRuntime").nonZero ?? 28800 // 8h
         self.launchAtLogin = d.bool(forKey: "launchAtLogin")
         self.soundOnCritical = d.object(forKey: "soundOnCritical") != nil ? d.bool(forKey: "soundOnCritical") : true
+
+        // Emergency Mode defaults — use object-presence check for bools so an
+        // absent key picks up the hard-coded default (mirrors `soundOnCritical`).
+        self.emergencyModeEnabled = d.object(forKey: "emergencyModeEnabled") != nil
+            ? d.bool(forKey: "emergencyModeEnabled")
+            : true
+        self.emergencyLoadFactor = d.double(forKey: "emergencyLoadFactor").nonZero ?? 2.0
+        self.elevatedLoadFactor = d.double(forKey: "elevatedLoadFactor").nonZero ?? 1.0
+        self.emergencyCooldown = d.double(forKey: "emergencyCooldown").nonZero ?? 30
+        self.softKillPreferred = d.object(forKey: "softKillPreferred") != nil
+            ? d.bool(forKey: "softKillPreferred")
+            : true
 
         // Load rules
         if let data = d.data(forKey: "processRules"),
@@ -90,6 +126,11 @@ class WatchdogConfig: ObservableObject {
         rules = ProcessRule.defaultRules
         soundOnCritical = true
         excludedApps = Self.defaultExcludedApps
+        emergencyModeEnabled = true
+        emergencyLoadFactor = 2.0
+        elevatedLoadFactor = 1.0
+        emergencyCooldown = 30
+        softKillPreferred = true
     }
 
     private func saveExcludedApps() {

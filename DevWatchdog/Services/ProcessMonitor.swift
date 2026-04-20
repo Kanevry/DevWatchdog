@@ -12,12 +12,52 @@ class ProcessMonitor: ObservableObject {
     @Published var totalMemoryMB: Double = 0
     @Published var isScanning = false
     @Published var lastError: String?
+    /// Latest system-pressure snapshot republished from the injected source.
+    /// `nil` until the source emits its first value.
+    @Published var pressure: SystemPressureSnapshot?
+    /// Current overall emergency state (derived from pressure with hysteresis).
+    @Published private(set) var emergencyState: EmergencyState = .normal
+    /// Read-only audit trail of state transitions (most recent last; capped).
+    @Published private(set) var stateTransitions: [StateTransition] = []
+
+    /// Single transition record kept in ``stateTransitions``.
+    struct StateTransition: Sendable, Equatable {
+        let timestamp: Date
+        let from: EmergencyState
+        let to: EmergencyState
+    }
+
+    private static let maxStateTransitions = 50
 
     private var timer: Timer?
     private var config: WatchdogConfig?
     private var cancellables = Set<AnyCancellable>()
-    private let killer = ProcessKiller()
+    private let terminator: any ProcessTerminator
+    private let pressureSource: any SystemPressureSource
     private let notificationService = NotificationService()
+
+    /// In-memory session log — bounded ring buffer of monitor actions.
+    /// Exposed so `SessionLogView` (and any future UI) can observe it directly.
+    let sessionLog = SessionLog()
+
+    // Emergency-mode bookkeeping
+    private var lastHighSeenAt: Date?
+    /// When the current emergency period was entered (nil when not in emergency).
+    private var emergencyEnteredAt: Date?
+    /// Zombies killed during the currently-active emergency period (reset on exit).
+    private var emergencyKillCount: Int = 0
+    /// Memory (MB) reclaimed by kills during the currently-active emergency period.
+    private var emergencyFreedMemoryMB: Double = 0
+    /// Processes throttled during the currently-active emergency period.
+    private var emergencyThrottledCount: Int = 0
+
+    init(
+        pressureSource: (any SystemPressureSource)? = nil,
+        terminator: (any ProcessTerminator)? = nil
+    ) {
+        self.pressureSource = pressureSource ?? SystemPressureMonitor()
+        self.terminator = terminator ?? ProcessKiller()
+    }
 
     // Track processes pending auto-kill (PID -> first seen time + snapshotted grace period)
     private var pendingKills: [Int32: (firstSeen: Date, gracePeriod: TimeInterval)] = [:]
@@ -36,9 +76,40 @@ class ProcessMonitor: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Subscribe to the pressure source and republish on MainActor.
+        // `removeDuplicates` avoids no-op republishing when the source emits
+        // a snapshot identical to the previous one.
+        pressureSource.snapshotPublisher
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshot in
+                guard let self else { return }
+                if self.pressure != snapshot {
+                    self.pressure = snapshot
+                }
+                self.updateEmergencyState(from: snapshot)
+            }
+            .store(in: &cancellables)
+
+        // Reschedule whenever the user toggles Emergency Mode itself —
+        // otherwise an on-the-fly toggle keeps the old interval until the
+        // next pressure change.
+        config.$emergencyModeEnabled
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.scheduleTimer()
+            }
+            .store(in: &cancellables)
+
         // Request notification permission
         Task {
             await notificationService.requestPermission()
+        }
+
+        // Start the pressure source (fire-and-forget; start() is idempotent).
+        Task { [pressureSource] in
+            await pressureSource.start()
         }
 
         scheduleTimer()
@@ -53,6 +124,17 @@ class ProcessMonitor: ObservableObject {
         cancellables.removeAll()
         pendingKills.removeAll()
         notifiedZombiePIDs.removeAll()
+        lastHighSeenAt = nil
+        emergencyEnteredAt = nil
+        emergencyKillCount = 0
+        emergencyFreedMemoryMB = 0
+        emergencyThrottledCount = 0
+        emergencyState = .normal
+        // pressureSource.stop() is async to allow main-actor-isolated impls;
+        // fire-and-forget from the synchronous stop() entry point.
+        Task { [pressureSource] in
+            await pressureSource.stop()
+        }
     }
 
 
@@ -87,8 +169,8 @@ class ProcessMonitor: ObservableObject {
 
             // STAGE 3: Rule-based (for non-orphans and young orphans)
             if let rule = config.matchingRule(for: process) {
-                // Hard kill limit exceeded → zombie (even with living parent)
-                if rule.isMaxRuntimeExceeded(by: process) {
+                // Hard kill limits (runtime/CPU%/RSS) exceeded → zombie
+                if rule.shouldHardKill(process) {
                     zombies.append(process)
                 } else if rule.isTriggered(by: process) {
                     suspects.append(process)
@@ -112,6 +194,18 @@ class ProcessMonitor: ObservableObject {
                 suspects.append(process)
             }
             // Non-orphan, normal CPU, no rule match → skip (parent alive, likely intentional)
+        }
+
+        // Emergency triage: promote the three most resource-heavy suspects
+        // (by CPU·RSS score) to zombies. Point of emergency mode is to be
+        // aggressive — normally-protected warn-bucket processes get killed.
+        if emergencyState == .emergency && !suspects.isEmpty {
+            let promoted = suspects
+                .sorted { emergencyScore($0) > emergencyScore($1) }
+                .prefix(3)
+            let promotedIDs = Set(promoted.map(\.id))
+            zombies.append(contentsOf: promoted)
+            suspects.removeAll { promotedIDs.contains($0.id) }
         }
 
         // Sort: most obvious kill candidates first
@@ -143,7 +237,7 @@ class ProcessMonitor: ObservableObject {
     }
 
     func killProcess(_ process: DevProcess) {
-        let result = killer.kill(pid: process.pid)
+        let result = terminator.terminate(pid: process.pid)
         switch result {
         case .success, .alreadyDead:
             zombieProcesses.removeAll { $0.id == process.id }
@@ -151,8 +245,24 @@ class ProcessMonitor: ObservableObject {
             allProcesses.removeAll { $0.id == process.id }
             pendingKills.removeValue(forKey: process.pid)
             notifiedZombiePIDs.remove(process.pid)
+            sessionLog.log(
+                .kill,
+                "Killed \(process.processName) (\(String(format: "%.0f", process.memoryMB)) MB)",
+                pid: process.pid,
+                processName: process.processName
+            )
+            if emergencyState == .emergency, result == .success {
+                emergencyKillCount += 1
+                emergencyFreedMemoryMB += process.memoryMB
+            }
         case .permissionDenied:
             lastError = "Permission denied for PID \(process.pid)"
+            sessionLog.log(
+                .error,
+                "Kill denied: \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
             Task {
                 await notificationService.send(
                     title: "Kill failed",
@@ -161,8 +271,153 @@ class ProcessMonitor: ObservableObject {
             }
         case .failed(let err):
             lastError = "Kill failed for PID \(process.pid) (errno: \(err))"
+            sessionLog.log(
+                .error,
+                "Kill failed (errno \(err)): \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
         }
         // Clear error after 5 seconds
+        if lastError != nil {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.lastError = nil
+            }
+        }
+    }
+
+    /// Freeze a process (SIGSTOP + renice +20). Used as a graduated response
+    /// before full termination — e.g. by Emergency Mode triage.
+    func throttleProcess(_ process: DevProcess) {
+        let result = terminator.throttle(pid: process.pid)
+        switch result {
+        case .success:
+            // Optimistic state update for snappy UI feedback; next scan confirms.
+            if let idx = allProcesses.firstIndex(where: { $0.id == process.id }) {
+                let p = allProcesses[idx]
+                allProcesses[idx] = DevProcess(
+                    id: p.id,
+                    user: p.user,
+                    cpuPercent: p.cpuPercent,
+                    memPercent: p.memPercent,
+                    rss: p.rss,
+                    command: p.command,
+                    startTime: p.startTime,
+                    parentPID: p.parentPID,
+                    isOrphan: p.isOrphan,
+                    state: .stopped
+                )
+            }
+            sessionLog.log(
+                .throttle,
+                "Throttled \(process.processName) via SIGSTOP",
+                pid: process.pid,
+                processName: process.processName
+            )
+            if emergencyState == .emergency {
+                emergencyThrottledCount += 1
+            }
+            Task {
+                await notificationService.send(
+                    title: "Process throttled",
+                    body: "\(process.processName) (PID \(process.pid)) frozen via SIGSTOP."
+                )
+            }
+        case .alreadyDead:
+            allProcesses.removeAll { $0.id == process.id }
+            zombieProcesses.removeAll { $0.id == process.id }
+            suspectProcesses.removeAll { $0.id == process.id }
+        case .permissionDenied:
+            lastError = "Permission denied throttling PID \(process.pid)"
+            sessionLog.log(
+                .error,
+                "Throttle denied: \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
+            Task {
+                await notificationService.send(
+                    title: "Throttle failed",
+                    body: "Permission denied for \(process.processName) (PID \(process.pid))."
+                )
+            }
+        case .failed(let err):
+            lastError = "Throttle failed for PID \(process.pid) (errno: \(err))"
+            sessionLog.log(
+                .error,
+                "Throttle failed (errno \(err)): \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
+        }
+        if lastError != nil {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(5))
+                self?.lastError = nil
+            }
+        }
+    }
+
+    /// Resume a previously throttled/stopped process (SIGCONT).
+    func resumeProcess(_ process: DevProcess) {
+        let result = terminator.resume(pid: process.pid)
+        switch result {
+        case .success:
+            if let idx = allProcesses.firstIndex(where: { $0.id == process.id }) {
+                let p = allProcesses[idx]
+                allProcesses[idx] = DevProcess(
+                    id: p.id,
+                    user: p.user,
+                    cpuPercent: p.cpuPercent,
+                    memPercent: p.memPercent,
+                    rss: p.rss,
+                    command: p.command,
+                    startTime: p.startTime,
+                    parentPID: p.parentPID,
+                    isOrphan: p.isOrphan,
+                    state: .running
+                )
+            }
+            sessionLog.log(
+                .resume,
+                "Resumed \(process.processName) via SIGCONT",
+                pid: process.pid,
+                processName: process.processName
+            )
+            Task {
+                await notificationService.send(
+                    title: "Process resumed",
+                    body: "\(process.processName) (PID \(process.pid)) resumed via SIGCONT."
+                )
+            }
+        case .alreadyDead:
+            allProcesses.removeAll { $0.id == process.id }
+            zombieProcesses.removeAll { $0.id == process.id }
+            suspectProcesses.removeAll { $0.id == process.id }
+        case .permissionDenied:
+            lastError = "Permission denied resuming PID \(process.pid)"
+            sessionLog.log(
+                .error,
+                "Resume denied: \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
+            Task {
+                await notificationService.send(
+                    title: "Resume failed",
+                    body: "Permission denied for \(process.processName) (PID \(process.pid))."
+                )
+            }
+        case .failed(let err):
+            lastError = "Resume failed for PID \(process.pid) (errno: \(err))"
+            sessionLog.log(
+                .error,
+                "Resume failed (errno \(err)): \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
+        }
         if lastError != nil {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(5))
@@ -176,15 +431,31 @@ class ProcessMonitor: ObservableObject {
         let count = zombieProcesses.count
 
         for process in zombieProcesses {
-            _ = killer.kill(pid: process.pid)
+            _ = terminator.terminate(pid: process.pid)
+            sessionLog.log(
+                .kill,
+                "Batch-killed \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
         }
         zombieProcesses.removeAll()
         pendingKills.removeAll()
         notifiedZombiePIDs.removeAll()
 
         if count > 0 {
-            Task {
-                await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
+            if emergencyState == .emergency {
+                emergencyKillCount += count
+                emergencyFreedMemoryMB += memoryMB
+            }
+            let decision = EmergencyNotificationBatcher.onKillDuringEmergency(
+                emergencyState: emergencyState,
+                isNewBatch: true
+            )
+            if !decision.suppressIndividualKills {
+                Task {
+                    await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
+                }
             }
         }
     }
@@ -194,14 +465,30 @@ class ProcessMonitor: ObservableObject {
         let count = suspectProcesses.count
 
         for process in suspectProcesses {
-            _ = killer.kill(pid: process.pid)
+            _ = terminator.terminate(pid: process.pid)
+            sessionLog.log(
+                .kill,
+                "Batch-killed suspect \(process.processName)",
+                pid: process.pid,
+                processName: process.processName
+            )
         }
         suspectProcesses.removeAll()
         allProcesses.removeAll { p in !zombieProcesses.contains(where: { $0.id == p.id }) && !whitelistedProcesses.contains(where: { $0.id == p.id }) }
 
         if count > 0 {
-            Task {
-                await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
+            if emergencyState == .emergency {
+                emergencyKillCount += count
+                emergencyFreedMemoryMB += memoryMB
+            }
+            let decision = EmergencyNotificationBatcher.onKillDuringEmergency(
+                emergencyState: emergencyState,
+                isNewBatch: true
+            )
+            if !decision.suppressIndividualKills {
+                Task {
+                    await notificationService.sendBatchKillSummary(count: count, freedMemoryMB: memoryMB)
+                }
             }
         }
     }
@@ -210,12 +497,131 @@ class ProcessMonitor: ObservableObject {
 
     private func scheduleTimer() {
         timer?.invalidate()
-        let interval = config?.scanInterval ?? 30
+        let interval = effectiveScanInterval
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.scan()
             }
         }
+    }
+
+    /// Effective scan cadence. Tightens automatically while in elevated /
+    /// emergency state (issue #6).
+    var effectiveScanInterval: TimeInterval {
+        guard let config else { return 30 }
+        guard config.emergencyModeEnabled else { return config.scanInterval }
+        switch emergencyState {
+        case .normal:
+            return config.scanInterval
+        case .elevated:
+            // Bias toward more frequent scans, but never faster than 2s and
+            // never slower than 10s.
+            return max(2, min(config.scanInterval / 3, 10))
+        case .emergency:
+            // Aggressive 3s cadence with a hard 2s floor.
+            return max(2, 3)
+        }
+    }
+
+    /// Effective grace period applied in ``handleAutoKill(zombies:config:)``.
+    /// Emergency collapses grace to zero — all pending kills become immediately
+    /// eligible for termination.
+    var effectiveGracePeriod: TimeInterval {
+        guard let config else { return 30 }
+        guard config.emergencyModeEnabled else { return config.gracePeriod }
+        switch emergencyState {
+        case .normal:    return config.gracePeriod
+        case .elevated:  return config.gracePeriod / 2
+        case .emergency: return 0
+        }
+    }
+
+    // MARK: - Emergency state
+
+    private func updateEmergencyState(from snapshot: SystemPressureSnapshot) {
+        guard let config else { return }
+        // Build a deriver from live config. Struct is cheap — no need to cache.
+        let deriver = EmergencyStateDeriver(
+            ncpu: snapshot.ncpu,
+            emergencyLoadFactor: config.emergencyLoadFactor,
+            elevatedLoadFactor: config.elevatedLoadFactor,
+            cooldownSeconds: config.emergencyCooldown
+        )
+        let desired = deriver.desired(from: snapshot)
+        let now = Date()
+        let result = deriver.nextState(
+            current: emergencyState,
+            desired: desired,
+            now: now,
+            lastHighSeenAt: lastHighSeenAt
+        )
+        lastHighSeenAt = result.lastHighSeenAt
+
+        if result.state != emergencyState {
+            let previous = emergencyState
+            emergencyState = result.state
+            recordTransition(from: previous, to: result.state, at: now)
+            handleStateTransition(from: previous, to: result.state, snapshot: snapshot)
+        }
+    }
+
+    private func recordTransition(from: EmergencyState, to: EmergencyState, at date: Date) {
+        stateTransitions.append(StateTransition(timestamp: date, from: from, to: to))
+        if stateTransitions.count > Self.maxStateTransitions {
+            stateTransitions.removeFirst(stateTransitions.count - Self.maxStateTransitions)
+        }
+    }
+
+    private func handleStateTransition(
+        from: EmergencyState,
+        to: EmergencyState,
+        snapshot: SystemPressureSnapshot
+    ) {
+        let decision = EmergencyNotificationBatcher.onStateTransition(from: from, to: to)
+
+        // Track emergency periods for the "exit summary" notification.
+        if decision.sendEntryAlert {
+            emergencyEnteredAt = Date()
+            emergencyKillCount = 0
+            emergencyFreedMemoryMB = 0
+            emergencyThrottledCount = 0
+            sessionLog.log(
+                .emergencyEntered,
+                "Emergency entered (loadFactor \(String(format: "%.2f", snapshot.loadFactor)), level \(snapshot.level))"
+            )
+            Task { [notificationService] in
+                await notificationService.sendEmergencyEnteredAlert(snapshot: snapshot)
+            }
+        } else if decision.sendExitAlert {
+            let enteredAt = emergencyEnteredAt
+            let killed = emergencyKillCount
+            let throttled = emergencyThrottledCount
+            let freed = emergencyFreedMemoryMB
+            let duration: TimeInterval = enteredAt.map { Date().timeIntervalSince($0) } ?? 0
+            sessionLog.log(
+                .emergencyExited,
+                "Emergency ended after \(Int(duration))s — \(killed) killed, \(throttled) throttled, \(String(format: "%.0f", freed)) MB freed"
+            )
+            emergencyEnteredAt = nil
+            emergencyKillCount = 0
+            emergencyFreedMemoryMB = 0
+            emergencyThrottledCount = 0
+            Task { [notificationService] in
+                await notificationService.sendEmergencyExitedSummary(
+                    duration: duration,
+                    killedCount: killed,
+                    throttledCount: throttled,
+                    freedMemoryMB: freed
+                )
+            }
+        }
+
+        // Any state change potentially changes the effective scan interval.
+        scheduleTimer()
+    }
+
+    private func emergencyScore(_ p: DevProcess) -> Double {
+        return max(p.cpuPercent, 1.0) * max(p.memoryMB, 1.0)
     }
 
     private func handleAutoKill(zombies: [DevProcess], config: WatchdogConfig) async {
@@ -249,25 +655,51 @@ class ProcessMonitor: ObservableObject {
         var killedCount = 0
         var freedMemory = 0.0
 
+        // Use the emergency-aware grace period. Re-computed each scan so a
+        // state transition during an active pending-kill queue is honoured —
+        // entering .emergency effectively collapses grace to 0 and everything
+        // expires on the next pass.
+        let graceNow = effectiveGracePeriod
+
         for zombie in zombies {
             if let entry = pendingKills[zombie.pid] {
-                if now.timeIntervalSince(entry.firstSeen) >= entry.gracePeriod {
-                    _ = killer.kill(pid: zombie.pid)
+                // Evaluate against the *current* effective grace, not the one
+                // snapshotted at first-seen time.
+                if now.timeIntervalSince(entry.firstSeen) >= graceNow {
+                    _ = terminator.terminate(pid: zombie.pid)
                     pendingKills.removeValue(forKey: zombie.pid)
                     notifiedZombiePIDs.remove(zombie.pid)
                     killedCount += 1
                     freedMemory += zombie.memoryMB
+                    sessionLog.log(
+                        .kill,
+                        "Auto-killed zombie \(zombie.processName) (\(String(format: "%.0f", zombie.memoryMB)) MB)",
+                        pid: zombie.pid,
+                        processName: zombie.processName
+                    )
+                    if emergencyState == .emergency {
+                        emergencyKillCount += 1
+                        emergencyFreedMemoryMB += zombie.memoryMB
+                    }
                 }
                 // else: still within grace period, wait
             } else {
-                // First time seeing this zombie — start grace period
-                pendingKills[zombie.pid] = (firstSeen: now, gracePeriod: config.gracePeriod)
+                // First time seeing this zombie — start grace period with the
+                // current effective value.
+                pendingKills[zombie.pid] = (firstSeen: now, gracePeriod: graceNow)
             }
         }
 
-        // Send batch kill summary
+        // Send batch kill summary — unless we're in emergency, in which case
+        // individual kills are aggregated into the exit summary instead.
         if killedCount > 0 {
-            await notificationService.sendBatchKillSummary(count: killedCount, freedMemoryMB: freedMemory)
+            let decision = EmergencyNotificationBatcher.onKillDuringEmergency(
+                emergencyState: emergencyState,
+                isNewBatch: true
+            )
+            if !decision.suppressIndividualKills {
+                await notificationService.sendBatchKillSummary(count: killedCount, freedMemoryMB: freedMemory)
+            }
 
             // Remove killed zombies from published list
             let killedPIDs = Set(zombies.filter { pid in
@@ -293,6 +725,7 @@ enum PSParser: Sendable {
         let cpu: Double
         let mem: Double
         let rss: Int
+        let state: String
         let command: String
         let startTime: Date?
     }
@@ -309,7 +742,7 @@ enum PSParser: Sendable {
         }
 
         process.executableURL = psURL
-        process.arguments = ["-eo", "user=,pid=,ppid=,%cpu=,%mem=,rss=,start=,args="]
+        process.arguments = ["-eo", "user=,pid=,ppid=,%cpu=,%mem=,rss=,state=,start=,args="]
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
 
@@ -384,7 +817,8 @@ enum PSParser: Sendable {
                 command: parsed.command,
                 startTime: parsed.startTime,
                 parentPID: parentPID,
-                isOrphan: isOrphan
+                isOrphan: isOrphan,
+                state: ProcessState(psStateString: parsed.state)
             )
             results.append(devProcess)
         }
@@ -393,20 +827,21 @@ enum PSParser: Sendable {
     }
 
     static func parsePSLine(_ line: String) -> PSParsed? {
-        // ps -eo format: USER PID PPID %CPU %MEM RSS STARTED ARGS
+        // ps -eo format: USER PID PPID %CPU %MEM RSS STATE STARTED ARGS
         // Split by whitespace, but args (command) can contain spaces
-        let components = line.split(separator: " ", maxSplits: 7, omittingEmptySubsequences: true)
-        guard components.count >= 8 else { return nil }
+        let components = line.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true)
+        guard components.count >= 9 else { return nil }
 
         guard let pid = Int32(components[1]) else { return nil }
         guard let ppid = Int32(components[2]) else { return nil }
         let cpu = Double(components[3]) ?? 0
         let mem = Double(components[4]) ?? 0
         let rss = Int(components[5]) ?? 0
-        let command = String(components[7])
+        let state = String(components[6])
+        let command = String(components[8])
 
-        // Parse STARTED (column 6) - format varies: "HH:MM" or "MonDD" or "YYYY"
-        let startedStr = String(components[6])
+        // Parse STARTED (column 7) - format varies: "HH:MM" or "MonDD" or "YYYY"
+        let startedStr = String(components[7])
         let startTime = parseStartTime(startedStr)
 
         return PSParsed(
@@ -416,6 +851,7 @@ enum PSParser: Sendable {
             cpu: cpu,
             mem: mem,
             rss: rss,
+            state: state,
             command: command,
             startTime: startTime
         )

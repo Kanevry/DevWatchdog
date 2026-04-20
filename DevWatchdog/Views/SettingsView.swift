@@ -2,9 +2,20 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var config: WatchdogConfig
+    /// Optional — supplied by call sites that want to show the live "Aktuelle Werte"
+    /// panel on the Emergency tab. Defaults to `nil` so existing call sites
+    /// (e.g. `DevWatchdogApp.openSettings()`) continue to compile without change.
+    /// Wave 5 coordinator: pass the app's shared `ProcessMonitor` here to enable
+    /// the live readout.
+    var monitor: ProcessMonitor?
     @State private var newRulePattern = ""
     @State private var showingResetConfirmation = false
     @State private var newExcludedApp = ""
+
+    init(config: WatchdogConfig, monitor: ProcessMonitor? = nil) {
+        self.config = config
+        self.monitor = monitor
+    }
 
     var body: some View {
         TabView {
@@ -18,6 +29,11 @@ struct SettingsView: View {
                     Label("Rules", systemImage: "list.bullet.rectangle")
                 }
 
+            emergencyTab
+                .tabItem {
+                    Label("Emergency", systemImage: "bolt.shield.fill")
+                }
+
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
@@ -25,6 +41,18 @@ struct SettingsView: View {
         }
         .frame(minWidth: 480, minHeight: 500)
         .padding()
+    }
+
+    // MARK: - Emergency Tab
+
+    @ViewBuilder
+    private var emergencyTab: some View {
+        if let monitor {
+            EmergencySettingsView(config: config, monitor: monitor)
+        } else {
+            // No monitor injected — render settings without the live readout.
+            EmergencySettingsViewNoLive(config: config)
+        }
     }
 
     // MARK: - General Tab
@@ -246,9 +274,72 @@ struct SettingsView: View {
                     }
                 }
                 .font(.caption)
+
+                advancedThresholds(rule: rule)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Absolute-threshold editor (issue #5) — CPU%, RSS (MB), and combinator.
+    /// Rendered as a disclosure group to keep the row compact by default.
+    private func advancedThresholds(rule: Binding<ProcessRule>) -> some View {
+        DisclosureGroup("Erweitert (absolute Limits)") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        Text("Max CPU:")
+                            .foregroundStyle(.red)
+                        TextField("0", value: rule.maxCPUPercent, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 60)
+                            .help("0 = deaktiviert. CPU% über diesem Wert → sofortiger Kill.")
+                        Text("%")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack(spacing: 4) {
+                        Text("Max RSS:")
+                            .foregroundStyle(.red)
+                        TextField("0", value: rule.maxRSSMB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                            .help("0 = deaktiviert. RSS (MB) über diesem Wert → sofortiger Kill.")
+                        Text("MB")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+
+                HStack(spacing: 6) {
+                    Text("Kombination:")
+                        .foregroundStyle(.secondary)
+                    Picker("", selection: rule.thresholdMode) {
+                        ForEach(ProcessRule.ThresholdMode.allCases, id: \.self) { mode in
+                            Text(thresholdModeLabel(mode)).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 260)
+                    .help("Any = mind. eine Schwelle ausreicht. All = alle konfigurierten Schwellen müssen überschritten sein.")
+                }
+
+                Text("0 = deaktiviert. Gilt zusammen mit „Kill: Max s“ als harte Kill-Limits.")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .padding(.top, 4)
+        }
+        .font(.caption)
+    }
+
+    private func thresholdModeLabel(_ mode: ProcessRule.ThresholdMode) -> String {
+        switch mode {
+        case .any: return "Mindestens eine (ODER)"
+        case .all: return "Alle (UND)"
+        }
     }
 
     private func deleteRules(at offsets: IndexSet) {

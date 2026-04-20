@@ -1,5 +1,31 @@
 import Foundation
 
+/// Unix process state, parsed from the `ps` `state` column.
+enum ProcessState: String, Sendable, Codable, Hashable {
+    /// Normal running / sleeping / idle states ('R', 'S', 'I', 'U', 'D', 'W').
+    case running
+    /// Stopped via SIGSTOP / SIGTSTP ('T').
+    case stopped
+    /// Unix-level zombie process ('Z') — distinct from DevWatchdog's "zombie" concept.
+    case zombie
+    /// Could not be determined.
+    case unknown
+
+    /// Map a `ps` state string (first character matters) to a ``ProcessState``.
+    init(psStateString: String) {
+        guard let first = psStateString.uppercased().first else {
+            self = .unknown
+            return
+        }
+        switch first {
+        case "T": self = .stopped
+        case "Z": self = .zombie
+        case "R", "S", "I", "U", "D", "W": self = .running
+        default: self = .unknown
+        }
+    }
+}
+
 struct DevProcess: Identifiable, Hashable, Sendable {
     let id: Int32 // PID
     let user: String
@@ -10,6 +36,31 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     let startTime: Date?
     let parentPID: Int32
     let isOrphan: Bool
+    let state: ProcessState
+
+    init(
+        id: Int32,
+        user: String,
+        cpuPercent: Double,
+        memPercent: Double,
+        rss: Int,
+        command: String,
+        startTime: Date?,
+        parentPID: Int32,
+        isOrphan: Bool,
+        state: ProcessState = .unknown
+    ) {
+        self.id = id
+        self.user = user
+        self.cpuPercent = cpuPercent
+        self.memPercent = memPercent
+        self.rss = rss
+        self.command = command
+        self.startTime = startTime
+        self.parentPID = parentPID
+        self.isOrphan = isOrphan
+        self.state = state
+    }
 
     var pid: Int32 { id }
 
