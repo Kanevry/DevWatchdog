@@ -4,9 +4,11 @@ session-type: feature
 branch: main
 issues: [38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48]
 started_at: 2026-04-21T14:00:00+02:00
-status: active
+status: completed
 current-wave: 5
 total-waves: 5
+completed_at: 2026-04-21T12:45:00Z
+updated: 2026-04-21T12:45:00Z
 session_start_ref: e80fc0a1560b9d464802249c1eae84a76cd7260a
 ---
 
