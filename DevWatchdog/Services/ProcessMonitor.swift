@@ -159,9 +159,33 @@ class ProcessMonitor: ObservableObject {
         let excludedApps = config?.excludedApps ?? WatchdogConfig.defaultExcludedApps
         let inclusionPatterns = config?.inclusionPatterns ?? WatchdogConfig.defaultInclusionPatterns
         let psTimeout = config?.psTimeoutSeconds ?? 10
+        let useLibproc = config?.useLibprocEnumerator ?? false
+        let scanStart = Date()
         let rawProcesses = await Task.detached {
-            PSParser.parseProcessList(excludedApps: excludedApps, inclusionPatterns: inclusionPatterns, timeout: psTimeout)
+            if useLibproc {
+                return LibProcProcessEnumerator.parseProcessList(
+                    excludedApps: excludedApps,
+                    inclusionPatterns: inclusionPatterns
+                )
+            } else {
+                return PSParser.parseProcessList(
+                    excludedApps: excludedApps,
+                    inclusionPatterns: inclusionPatterns,
+                    timeout: psTimeout
+                )
+            }
         }.value
+        let scanDurationMs = Int(Date().timeIntervalSince(scanStart) * 1000)
+        DWLogger.shared.log(
+            "scan backend=\(useLibproc ? "libproc" : "ps") count=\(rawProcesses.count) durationMs=\(scanDurationMs)",
+            category: .monitor,
+            level: .info
+        )
+        if useLibproc {
+            // libproc path cannot fail in the subprocess-timeout / exit-status sense, so clear
+            // any stale spike from a prior /bin/ps-era run to prevent a stuck UI indicator.
+            PSFailureCounter.shared.recordSuccess()
+        }
         self.psFailureSpike = PSFailureCounter.shared.failureSpike
 
         // Enrich each process with PPID-history-derived orphan confidence.

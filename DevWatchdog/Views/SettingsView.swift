@@ -248,6 +248,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Entwickler") {
+                Toggle("Experimentell — libproc-Scanner", isOn: $config.useLibprocEnumerator)
+                Text("Verwendet die native libproc-API statt /bin/ps-Subprozess. Schneller, aber noch in Erprobung. Wirkt ab nächstem Scan.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 Button("Auf Defaults zurücksetzen") {
                     showingResetConfirmation = true

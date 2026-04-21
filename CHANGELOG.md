@@ -4,6 +4,20 @@ All notable changes to DevWatchdog are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **libproc-based process enumerator (opt-in, feature-flagged)** — new
+  `LibProcProcessEnumerator` using `proc_listpids` + `proc_pidinfo` directly,
+  replacing the `/bin/ps` subprocess path when `useLibprocEnumerator` is
+  enabled in Settings → Entwickler. Defaults `false`; same `DevProcess` output
+  shape as `PSParser`; same filter semantics (inclusion patterns, excluded
+  apps, Playwright exemption, `/Applications/` heuristic). Scan duration is
+  now logged on both backends for before/after timing comparison. Known MVP
+  divergences: `command` is exec-path only (not full argv); CPU% is cumulative
+  since start (delta-sampling deferred). Closes GitLab #34 (G5).
+
 ## [3.2.0] — 2026-04-21
 
 Triage follow-up release. User-facing UX clarity (why-badges, smart kill split,

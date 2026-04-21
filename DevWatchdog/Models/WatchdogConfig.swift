@@ -68,6 +68,11 @@ class WatchdogConfig: ObservableObject {
     @Published var psTimeoutSeconds: TimeInterval {
         didSet { defaults.set(psTimeoutSeconds, forKey: "psTimeoutSeconds") }
     }
+    /// Feature flag: use the native libproc enumerator instead of the /bin/ps subprocess.
+    /// Opt-in only (default false) during the G5 rollout. Takes effect on the next scan.
+    @Published var useLibprocEnumerator: Bool {
+        didSet { defaults.set(useLibprocEnumerator, forKey: "useLibprocEnumerator") }
+    }
 
     static let defaultInclusionPatterns = [
         "node", "vitest", "jest", "tsc", "tsgo", "esbuild", "next", "webpack",
@@ -107,6 +112,7 @@ class WatchdogConfig: ObservableObject {
             : true
         self.emergencyMinAgeSeconds = d.double(forKey: "emergencyMinAgeSeconds").nonZero ?? 60
         self.psTimeoutSeconds = d.double(forKey: "psTimeoutSeconds").nonZero ?? 10
+        self.useLibprocEnumerator = d.object(forKey: "useLibprocEnumerator") as? Bool ?? false
 
         // Load rules
         if let data = d.data(forKey: "processRules"),
@@ -161,6 +167,7 @@ class WatchdogConfig: ObservableObject {
         softKillPreferred = true
         emergencyMinAgeSeconds = 60
         psTimeoutSeconds = 10
+        useLibprocEnumerator = false
     }
 
     private func saveExcludedApps() {
