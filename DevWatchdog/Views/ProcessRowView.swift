@@ -13,9 +13,11 @@ struct ProcessRowView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Status indicator
+            // Status indicator — colored by KillConfidence so a glance down
+            // the list immediately separates urgent (red) from review-me
+            // (orange) from likely-intentional (yellow/green).
             Circle()
-                .fill(isZombie ? .red : .orange)
+                .fill(statusDotColor)
                 .frame(width: 6, height: 6)
 
             // State icon (leading)
@@ -32,13 +34,11 @@ struct ProcessRowView: View {
                             .font(.system(size: 9))
                             .foregroundStyle(.yellow)
                     }
-                    if process.isOrphan {
-                        Text("orphan")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(.red.opacity(0.7)))
+                    // Up to 3 analyzer-derived badges answering "why is this
+                    // on the list" (e.g. NEW ORPHAN, IDLE 7m, LEAK 842MB).
+                    // Cap at 3 so a busy row does not push CPU% off-screen.
+                    ForEach(Array(process.signals.badges.prefix(3).enumerated()), id: \.offset) { _, signal in
+                        signalBadge(signal)
                     }
                 }
 
@@ -155,7 +155,87 @@ struct ProcessRowView: View {
         if isPaused {
             return Color.yellow.opacity(isHovered ? 0.15 : 0.08)
         }
-        return isHovered ? Color.primary.opacity(0.05) : Color.clear
+        // High-confidence rows get a subtle red wash so a crowded list still
+        // draws the eye to the real zombies. Hover always intensifies.
+        let base: Color = {
+            switch process.signals.confidence {
+            case .high:   return .red
+            case .medium: return .orange
+            case .low:    return .primary
+            }
+        }()
+        let alpha: Double = {
+            switch process.signals.confidence {
+            case .high:   return isHovered ? 0.16 : 0.09
+            case .medium: return isHovered ? 0.12 : 0.06
+            case .low:    return isHovered ? 0.05 : 0.00
+            }
+        }()
+        return base.opacity(alpha)
+    }
+
+    /// Leading status dot. Encodes overall kill-confidence at a glance — a
+    /// user can scan down the list and only stop on red/orange dots.
+    private var statusDotColor: Color {
+        // Paused processes: keep the yellow signal so the strip + dot agree.
+        if isPaused { return .yellow }
+        switch process.signals.confidence {
+        case .high:   return .red
+        case .medium: return .orange
+        case .low:
+            // Fall back to legacy zombie-vs-suspect binary when the analyzer
+            // hasn't produced a confidence signal yet (first scan, whitelisted
+            // process, empty rule set).
+            return isZombie ? .red : .orange
+        }
+    }
+
+    /// Single capsule for a ``ProcessSignal``. Color maps loosely to severity
+    /// so the badges read correctly even without the dot — colorblind-friendly
+    /// via the label text ("LEAK", "IDLE", "ACTIVE"...) which is always shown.
+    @ViewBuilder
+    private func signalBadge(_ signal: ProcessSignal) -> some View {
+        Text(signal.label)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(badgeColor(for: signal).opacity(0.75)))
+            .help(badgeTooltip(for: signal))
+            .lineLimit(1)
+    }
+
+    private func badgeColor(for signal: ProcessSignal) -> Color {
+        switch signal {
+        case .newlyOrphaned, .ruleHardKill, .catchAllExpired: return .red
+        case .adoptedByLaunchd, .memoryLeak, .ruleWarn:       return .orange
+        case .idle:                                            return Color(red: 0.85, green: 0.65, blue: 0.2)
+        case .active:                                          return .green
+        case .paused:                                          return .yellow
+        }
+    }
+
+    private func badgeTooltip(for signal: ProcessSignal) -> String {
+        switch signal {
+        case .newlyOrphaned:
+            return "Elternprozess ist seit dem letzten Scan verschwunden (PPID wechselte auf 1)."
+        case .adoptedByLaunchd:
+            return "Läuft unter launchd (PID 1). Kann ein legitimer Daemon oder eine abgekoppelte Shell sein."
+        case .idle(let minutes):
+            return "Kein CPU-Verbrauch, läuft seit \(minutes) min. Guter Kandidat zum Schließen."
+        case .active(let percent):
+            return "Aktuell \(percent)% CPU — wahrscheinlich ein laufender Build/Test."
+        case .memoryLeak(let mb):
+            return "Kein CPU-Verbrauch, aber \(mb) MB RSS — klassisches Leak-Muster."
+        case .ruleWarn(let pattern):
+            return "Regel '\(pattern)' warnt (Schwellen überschritten, aber noch unter Hard-Kill)."
+        case .ruleHardKill(let pattern, let trigger):
+            return "Regel '\(pattern)' — Hard-Kill-Grenze erreicht (\(trigger))."
+        case .catchAllExpired:
+            return "Catch-all-Safety-Net: Laufzeit-Obergrenze überschritten."
+        case .paused:
+            return "Pausiert (SIGSTOP) — wartet auf Resume oder Kill."
+        }
     }
 
     private var primaryActionIcon: String {

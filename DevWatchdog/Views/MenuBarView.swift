@@ -116,7 +116,7 @@ struct MenuBarView: View {
                 VStack(alignment: .trailing, spacing: 2) {
                     emergencyStatePill
                     if let lastScan = monitor.lastScan {
-                        Text("Scanned \(lastScan, style: .relative) ago")
+                        Text("vor \(lastScan, style: .relative)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -200,7 +200,7 @@ struct MenuBarView: View {
                 Circle()
                     .fill(.orange)
                     .frame(width: 6, height: 6)
-                Text("Elevated")
+                Text("Erhöht")
                     .font(.caption2)
                     .fontWeight(.semibold)
                     .foregroundStyle(.orange)
@@ -232,9 +232,9 @@ struct MenuBarView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "trash.fill")
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("Kill \(count) Zombie\(count == 1 ? "" : "s")")
+                            Text("\(count) Zombie\(count == 1 ? "" : "s") beenden")
                                 .fontWeight(.medium)
-                            Text("\(String(format: "%.0f", memMB)) MB — orphaned or expired, safe to kill")
+                            Text("\(String(format: "%.0f", memMB)) MB — verwaist oder abgelaufen, sicher zu beenden")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.8))
                         }
@@ -246,7 +246,7 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.green.opacity(0.85))
-                .help("Kills all zombie processes. These are orphaned (no parent) or exceeded their max runtime. Always safe — nobody is using them.")
+                .help("Beendet alle Zombie-Prozesse. Das sind verwaiste (ohne Parent) oder Prozesse, die ihre Max-Laufzeit überschritten haben. Immer sicher — niemand benutzt sie.")
             }
 
             // Kill All Suspects — ampel color based on risk
@@ -264,7 +264,7 @@ struct MenuBarView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "trash")
                         VStack(alignment: .leading, spacing: 0) {
-                            Text("Kill \(count) Suspects")
+                            Text("\(count) Verdächtige beenden")
                                 .fontWeight(.medium)
                             Text("\(String(format: "%.0f", memMB)) MB — \(riskLabel)")
                                 .font(.caption2)
@@ -294,9 +294,9 @@ struct MenuBarView: View {
     }
 
     private func suspectRiskLabel(maxCPU: Double) -> String {
-        if maxCPU > 50 { return "some active (up to \(String(format: "%.0f", maxCPU))% CPU)" }
-        if maxCPU > 1 { return "low activity, review recommended" }
-        return "all idle, safe to kill"
+        if maxCPU > 50 { return "einige aktiv (bis zu \(String(format: "%.0f", maxCPU))% CPU)" }
+        if maxCPU > 1 { return "geringe Aktivität, Prüfung empfohlen" }
+        return "alle inaktiv, sicher zu beenden"
     }
 
     private func suspectRiskIcon(maxCPU: Double) -> String {
@@ -307,12 +307,12 @@ struct MenuBarView: View {
 
     private func suspectRiskTooltip(maxCPU: Double) -> String {
         if maxCPU > 50 {
-            return "Some suspects are actively using CPU (\(String(format: "%.0f", maxCPU))%). This could be a running test or build. Review the list before killing."
+            return "Einige Verdächtige nutzen aktuell CPU (\(String(format: "%.0f", maxCPU))%). Könnte ein laufender Test oder Build sein — Liste vorher prüfen."
         }
         if maxCPU > 1 {
-            return "Some suspects show low CPU activity. Probably safe, but check the list for anything you recognize."
+            return "Einige Verdächtige zeigen geringe CPU-Aktivität. Wahrscheinlich sicher, aber Liste auf Bekanntes prüfen."
         }
-        return "All suspects are at 0% CPU — idle processes that are safe to kill."
+        return "Alle Verdächtigen sind bei 0% CPU — inaktive Prozesse, sicher zu beenden."
     }
 
     // MARK: - Empty State
@@ -322,9 +322,9 @@ struct MenuBarView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 32))
                 .foregroundStyle(.green)
-            Text("All clear")
+            Text("Alles sauber")
                 .font(.headline)
-            Text("No zombie processes detected")
+            Text("Keine Zombie-Prozesse erkannt")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -441,7 +441,7 @@ struct MenuBarView: View {
                 HStack(spacing: 4) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Scanning...")
+                    Text("Scanne…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -449,7 +449,7 @@ struct MenuBarView: View {
                 Button {
                     Task { await monitor.scan() }
                 } label: {
-                    Label("Scan Now", systemImage: "arrow.clockwise")
+                    Label("Jetzt scannen", systemImage: "arrow.clockwise")
                 }
             }
 
@@ -465,13 +465,13 @@ struct MenuBarView: View {
             Button {
                 openSettings()
             } label: {
-                Label("Settings", systemImage: "gear")
+                Label("Einstellungen", systemImage: "gear")
             }
 
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("Quit", systemImage: "power")
+                Label("Beenden", systemImage: "power")
             }
         }
         .buttonStyle(.borderless)
@@ -561,7 +561,7 @@ struct ProcessGroupRowView: View {
                             .font(.system(size: 14))
                     }
                     .buttonStyle(.borderless)
-                    .help("Kill all \(group.count) \(group.name) processes")
+                    .help("Alle \(group.count) \(group.name)-Prozesse beenden")
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)

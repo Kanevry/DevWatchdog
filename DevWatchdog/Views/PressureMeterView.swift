@@ -12,7 +12,7 @@ struct PressureMeterView: View {
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
                 // Memory row — colored progress bar
                 GridRow {
-                    Text("Memory")
+                    Text("Speicher")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     memoryBar(for: snapshot.memoryPressure)

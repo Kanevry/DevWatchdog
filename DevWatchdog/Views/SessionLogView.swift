@@ -69,10 +69,10 @@ struct SessionLogView: View {
     private var footer: some View {
         HStack {
             Menu {
-                Button("Copy as JSON") {
+                Button("Als JSON kopieren") {
                     LogExporter.copyJSONToPasteboard(entries: log.entries)
                 }
-                Button("Save Log…") {
+                Button("Log speichern…") {
                     Task { @MainActor in
                         _ = await LogExporter.promptAndSaveJSON(entries: log.entries)
                     }

@@ -25,17 +25,17 @@ struct SettingsView: View {
         TabView {
             generalTab
                 .tabItem {
-                    Label("General", systemImage: "gear")
+                    Label("Allgemein", systemImage: "gear")
                 }
 
             rulesTab
                 .tabItem {
-                    Label("Rules", systemImage: "list.bullet.rectangle")
+                    Label("Regeln", systemImage: "list.bullet.rectangle")
                 }
 
             emergencyTab
                 .tabItem {
-                    Label("Emergency", systemImage: "bolt.shield.fill")
+                    Label("Notfall", systemImage: "bolt.shield.fill")
                 }
 
             InsightsView(engine: insightsEngine)
@@ -45,7 +45,7 @@ struct SettingsView: View {
 
             aboutTab
                 .tabItem {
-                    Label("About", systemImage: "info.circle")
+                    Label("Über", systemImage: "info.circle")
                 }
         }
         .frame(minWidth: 520, minHeight: 500)
@@ -73,16 +73,16 @@ struct SettingsView: View {
                     Circle()
                         .fill(.green)
                         .frame(width: 8, height: 8)
-                    Text("Auto-Kill active")
+                    Text("Auto-Kill aktiv")
                         .fontWeight(.medium)
                 }
-                Text("Orphaned dev processes are automatically killed after the grace period.")
+                Text("Verwaiste Dev-Prozesse werden nach der Grace-Period automatisch beendet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Timing") {
-                LabeledContent("Scan interval") {
+                LabeledContent("Scan-Intervall") {
                     HStack {
                         Slider(value: $config.scanInterval, in: 10...120, step: 5)
                             .frame(maxWidth: 200)
@@ -92,7 +92,7 @@ struct SettingsView: View {
                     }
                 }
 
-                LabeledContent("Orphan timeout") {
+                LabeledContent("Orphan-Timeout") {
                     HStack {
                         Slider(value: $config.orphanTimeout, in: 30...600, step: 10)
                             .frame(maxWidth: 200)
@@ -101,11 +101,11 @@ struct SettingsView: View {
                             .frame(width: 50, alignment: .trailing)
                     }
                 }
-                Text("How long an orphaned process may live before it's marked as zombie.")
+                Text("Wie lange ein verwaister Prozess leben darf, bevor er als Zombie markiert wird.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                LabeledContent("Grace period") {
+                LabeledContent("Grace-Period") {
                     HStack {
                         Slider(value: $config.gracePeriod, in: 10...120, step: 5)
                             .frame(maxWidth: 200)
@@ -114,11 +114,11 @@ struct SettingsView: View {
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
-                Text("Warning time before a zombie is killed. You can intervene during this time.")
+                Text("Warnzeit, bevor ein Zombie beendet wird. Du kannst in dieser Zeit noch eingreifen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                LabeledContent("Catch-all kill") {
+                LabeledContent("Catch-all Kill") {
                     HStack {
                         Slider(value: $config.catchAllMaxRuntime, in: 3600...86400, step: 3600)
                             .frame(maxWidth: 200)
@@ -127,21 +127,21 @@ struct SettingsView: View {
                             .frame(width: 50, alignment: .trailing)
                     }
                 }
-                Text("Any dev process without a specific rule running longer than this is killed. Safety net.")
+                Text("Jeder Dev-Prozess ohne spezifische Regel, der länger läuft, wird beendet. Sicherheitsnetz.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Notifications") {
-                Toggle("Sound alerts", isOn: $config.soundOnCritical)
+            Section("Benachrichtigungen") {
+                Toggle("Sound-Benachrichtigung bei kritischen Events", isOn: $config.soundOnCritical)
             }
 
             Section("System") {
-                Toggle("Launch at login", isOn: $config.launchAtLogin)
+                Toggle("Beim Login starten", isOn: $config.launchAtLogin)
             }
 
-            Section("Excluded Apps") {
-                Text("Processes from these apps are never shown as suspects.")
+            Section("Ausgeschlossene Apps") {
+                Text("Prozesse dieser Apps werden nie als Verdächtige angezeigt.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -161,10 +161,10 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    TextField("e.g. /MyApp.app/", text: $newExcludedApp)
+                    TextField("z.B. /MeineApp.app/", text: $newExcludedApp)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
-                    Button("Add") {
+                    Button("Hinzufügen") {
                         guard !newExcludedApp.isEmpty else { return }
                         config.excludedApps.append(newExcludedApp)
                         newExcludedApp = ""
@@ -173,8 +173,8 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Dev Filter") {
-                Text("Only processes matching at least one of these keywords are tracked by DevWatchdog.")
+            Section("Dev-Filter") {
+                Text("Nur Prozesse, die mindestens eines dieser Keywords enthalten, werden von DevWatchdog überwacht.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -194,10 +194,10 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    TextField("e.g. rollup", text: $newInclusionPattern)
+                    TextField("z.B. rollup", text: $newInclusionPattern)
                         .textFieldStyle(.roundedBorder)
                         .font(.caption)
-                    Button("Add") {
+                    Button("Hinzufügen") {
                         guard !newInclusionPattern.isEmpty else { return }
                         config.inclusionPatterns.append(newInclusionPattern)
                         newInclusionPattern = ""
@@ -207,14 +207,14 @@ struct SettingsView: View {
             }
 
             Section {
-                Button("Reset to Defaults") {
+                Button("Auf Defaults zurücksetzen") {
                     showingResetConfirmation = true
                 }
-                .alert("Reset all settings?", isPresented: $showingResetConfirmation) {
-                    Button("Reset", role: .destructive) {
+                .alert("Alle Einstellungen zurücksetzen?", isPresented: $showingResetConfirmation) {
+                    Button("Zurücksetzen", role: .destructive) {
                         config.resetToDefaults()
                     }
-                    Button("Cancel", role: .cancel) {}
+                    Button("Abbrechen", role: .cancel) {}
                 }
             }
         }
@@ -225,9 +225,9 @@ struct SettingsView: View {
 
     private var rulesTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Process Rules")
+            Text("Prozessregeln")
                 .font(.headline)
-            Text("Define how DevWatchdog handles specific process patterns. Orphaned processes are always auto-killed regardless of rules (unless whitelisted).")
+            Text("Lege fest, wie DevWatchdog bestimmte Prozess-Patterns behandelt. Verwaiste Prozesse werden immer automatisch beendet (außer Whitelist).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -243,10 +243,10 @@ struct SettingsView: View {
 
             // Add new rule
             HStack {
-                TextField("Pattern (e.g. next.*dev)", text: $newRulePattern)
+                TextField("Pattern (z.B. next.*dev)", text: $newRulePattern)
                     .textFieldStyle(.roundedBorder)
 
-                Button("Add Rule") {
+                Button("Regel hinzufügen") {
                     guard !newRulePattern.isEmpty else { return }
                     let rule = ProcessRule(
                         id: UUID(),
@@ -289,7 +289,7 @@ struct SettingsView: View {
             if rule.wrappedValue.action == .warn {
                 HStack(spacing: 12) {
                     HStack(spacing: 4) {
-                        Text("Warn:")
+                        Text("Warnen:")
                             .foregroundStyle(.secondary)
                         TextField("CPU %", value: rule.cpuThreshold, format: .number)
                             .textFieldStyle(.roundedBorder)
@@ -299,14 +299,14 @@ struct SettingsView: View {
                     }
 
                     HStack(spacing: 4) {
-                        TextField("Seconds", value: rule.runtimeThreshold, format: .number)
+                        TextField("Sekunden", value: rule.runtimeThreshold, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 60)
                         Text("s (\(formatDuration(rule.wrappedValue.runtimeThreshold)))")
                             .foregroundStyle(.secondary)
                     }
                     HStack(spacing: 4) {
-                        Text("Kill:")
+                        Text("Beenden:")
                             .foregroundStyle(.red)
                         TextField("Max s", value: rule.maxRuntime, format: .number)
                             .textFieldStyle(.roundedBorder)
@@ -405,15 +405,15 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
 
-            Text("Automatic cleanup of zombie dev processes on macOS.")
+            Text("Automatisches Aufräumen verwaister Dev-Prozesse unter macOS.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
             Divider()
 
             VStack(alignment: .leading, spacing: 8) {
-                InfoRow(label: "Author", value: "Bernhard Goetzendorfer")
-                InfoRow(label: "License", value: "MIT")
+                InfoRow(label: "Autor", value: "Bernhard Götzendorfer")
+                InfoRow(label: "Lizenz", value: "MIT")
                 InfoRow(label: "GitHub", value: "github.com/Kanevry/DevWatchdog")
             }
             .font(.caption)
