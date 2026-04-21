@@ -1,75 +1,78 @@
 ---
 schema-version: 1
-session-type: housekeeping
+session-type: feature
 branch: main
-issues: [33, 34, 35, 36, 37]
-started_at: 2026-04-21T10:30:00+02:00
+issues: [34]
+started_at: 2026-04-21T12:20:00+02:00
 status: completed
-current-wave: 1
-total-waves: 1
-completed_at: 2026-04-21T12:15:00+02:00
-updated: 2026-04-21T10:15:00Z
-release_tag: v3.2.0
+current-wave: 5
+total-waves: 5
+session_start_ref: 0555db8dc84628b81ebeaa7193f7f64416667f3b
+completed_at: 2026-04-21T13:50:33Z
+updated: 2026-04-21T11:50:33Z
 ---
 
 ## Current Wave
 
-Wave 1 — Triage Follow-Up (Wellen A + B) + K2 NSStatusItem Migration + v3.2.0 Release — DONE
+Wave 5 — Finalization — complete (inline, no subagent dispatched). Session-reviewer verdict: PROCEED. Ready for /close.
 
 ## Wave History
 
-### Wave 1 — Resume of interrupted triage session + K2 reopen + release
+### Wave 1 — Discovery (2 agents, Explore, read-only)
+- Agent "Audit PSParser output shape": done — 9 ps columns mapped, filter contract documented
+- Agent "libproc API reference audit": done — proc_listpids/proc_pidinfo/proc_pidpath documented, CPU% via mach_timebase_info
+- Duration: ~4 min
 
-Picked up an interrupted predecessor that had ~620 lines uncommitted in the working tree (K1/K3, A4, B1 backend, B4 stub). Executed the 3-commit stabilization split, finished Welle B UX/UI, added A3 persistence, migrated K2 to NSStatusItem after a three-parallel-agent research pass, and rolled it all up as a signed v3.2.0 release.
+### Wave 2 — Impl-Core (3 agents, parallel, worktree)
+- Agent "Build LibProcProcessEnumerator": done — NEW Services/LibProcProcessEnumerator.swift (211 LOC)
+- Agent "Feature flag in WatchdogConfig + Settings": done — @Published Bool default false, Entwickler section toggle
+- Agent "Wire scan-path branch in ProcessMonitor": done — flag-branched Task.detached, scan-duration log
+- Duration: ~2 min (parallel)
+- Build: SUCCEEDED post-merge
 
-**10 commits pushed** (github + gitlab):
+### Wave 3 — Impl-Polish (SKIPPED — deviation)
+Wave 2 Agent 1 already delivered the planned edge-case handling (permission-denied skip, proc_pidpath fallback, start-time guards). Delta-sample CPU% was explicitly deferred in original spec.
 
-1. `f9596a3` fix(pressure,menubar,about): K1 compressor + K2 TimelineView + K3 dynamic version
-2. `fb313b1` feat(process): A4 orphan history + B1 backend ProcessSignalsAnalyzer
-3. `0cfb70e` feat(ui): B1 signal badges + confidence row tint; B4 unify UI language to German
-4. `64dc6d0` feat(menubar): B2 split suspect kill button (idle/safe vs. active/risky)
-5. `e82517e` feat(settings): B3 hardware-aware Default/Recommended hints + per-section reset
-6. `affa7ff` feat(sessionlog): A3 persist log entries as JSONL + hydrate on launch
-7. `5145b42` revert(menubar): drop K2 TimelineView — breaks xctest IPC (re-opened as #33)
-8. `de25d23` chore: session state & metrics (mid-session bookkeeping)
-9. `3b27824` feat(menubar): replace MenuBarExtra with NSStatusItem + NSHostingView (closes #33)
-10. `9f183d4` chore(release): v3.2.0 — version bump + CHANGELOG entry
+### Wave 4 — Quality (1 agent, test-writer; full-gate verified inline)
+- Agent "Write LibProc parity tests": done — NEW DevWatchdogTests/LibProcProcessEnumeratorTests.swift (12 tests: 11 pass + 1 environment-dependent skip). Includes side-by-side parity test against PSParser for live test-runner PID.
+- Full Gate: 335 tests pass, 0 failures, 1 skipped (env-dependent, documented). Was 323 pre-session. Build clean, zero warnings, Swift 6 strict-concurrency satisfied.
 
-**Release:** `v3.2.0` tagged on both remotes · GitHub Release live with signed DMG asset (2.03 MB, SHA-256 `4efbd8f620fb71439d7955449fff38b926824d06ba51d213be7983b7030bc3ea`) · installed to `/Applications/DevWatchdog.app`; previous v3.1.0 kept at `DevWatchdog.app.v3.1.0-backup`.
+### Session-Reviewer (session-orchestrator:session-reviewer, post-Quality)
+- Verdict: **PROCEED**. 6/8 categories PASS, 2 WARN (silent failures + test depth + divergences — all documented, not blocking).
+- Must-fix: 1 trivial item (stale `psFailureSpike` on libproc path). **Fixed inline** in ProcessMonitor.swift — added `PSFailureCounter.shared.recordSuccess()` after libproc branch.
+- Nice-to-have deferred: SettingsView copy clarification for argument-pattern divergence, zombie `pbi_status` test, argument-pattern pinning test.
 
-**Tests: 323 passing** (was 289 pre-session).
+### Wave 5 — Finalization (inline, no subagent)
+- CHANGELOG.md — added [Unreleased] entry for libproc enumerator behind flag
+- GitLab #34 — session summary note posted (#note_25891)
+- STATE.md — this update
 
 ## Deviations
 
-- **K2 initially tried then reverted then re-solved:** f9596a3's `TimelineView(.periodic)` fixed the menu-bar-stale-until-hover bug at runtime but broke `xcodebuild test` with a 5.5 min IPC hang (reproducible, git-bisected). Reverted in 5145b42, then — after dispatching 3 parallel research agents — migrated from `MenuBarExtra` to `NSStatusItem` + `NSHostingView` in 3b27824. Research ruled out `.id()` as unverified speculation and confirmed the NSStatusItem approach is what Ice/Stats/Multi.app all use.
-- **B4 scope trimmed:** proper i18n (EN source + DE translation via xcstrings) was deferred; unified all mixed strings to pure German now for UX consistency, kept empty xcstrings + `de` knownRegion as scaffolding. Tracked as #37.
-- **Welle C deferred as its own session:** G5 / G2 / G1 are 8–12 h of refactor with large regression surface. Tracked as #34, #35, #36.
-- **2 commits instead of 3 for the initial stabilization:** A4 and B1-Backend hunks in DevProcess/ProcessMonitor were interleaved; splitting would have required broken intermediate states. Merged into fb313b1.
-- **Minor release scoping:** bumped to 3.2.0 (minor, not patch) because the session added multiple user-facing features (why-badges, smart kill split, settings recommendations, session log persistence) beyond pure bug fixes.
+- [2026-04-21T12:40:00+02:00] Wave 3 Impl-Polish skipped. Agent 1 of Wave 2 delivered the edge-case handling originally scoped for Wave 3 Agent 1; Wave 3 Agent 2's delta-sample CPU% was explicitly deferred in the original plan. Saves one wave of agent budget; acceptance criteria unaffected.
+- [2026-04-21T13:40:00+02:00] Applied 1-line polish inline during Wave 5 instead of dispatching Wave 3: cleared stale `psFailureSpike` on libproc path per session-reviewer finding. Trivial, tests still green.
+- [2026-04-21T13:40:00+02:00] Wave 4 dispatched with 1 test-writer agent instead of the planned 2. The test-writer ran the full test suite as part of its turn, absorbing the second agent's job (Full Gate). 335 tests pass post-wave.
 
 ## Session Baseline
 
-SESSION_START_REF: 8437fbb (pre-session HEAD)
-RELEASE_TAG: v3.2.0 (commit 9f183d4)
+SESSION_START_REF: 0555db8dc84628b81ebeaa7193f7f64416667f3b
+Issue: GitLab #34 (G5 libproc migration)
+Acceptance: feature flag default off ✓, existing 323 tests pass ✓ (now 335), new LibProcProcessEnumeratorTests verify parity ✓, scan duration logged on both paths ✓, Swift 6 strict-concurrency clean ✓.
 
-## Final Metrics
+## Changed Files
 
-- Commits: 10 new (plus this STATE.md bookkeeping commit)
-- Tag: v3.2.0 on both remotes
-- GitHub Release: https://github.com/Kanevry/DevWatchdog/releases/tag/v3.2.0 (live, signed DMG)
-- Files added: 5 (ProcessSignals.swift, SettingsRecommendations.swift, SessionLogPersistence.swift, AppDelegate.swift, MenuBarLabel.swift) + 3 test files + 1 xcstrings stub
-- LOC delta since v3.1.0: +2 234 / −324
-- Tests: 323 passing (was 289 pre-session; +34 new across A4/B1/A3/K1 suites)
-- Build: clean, no warnings, Swift 6 strict-concurrency satisfied
-- Signature: Developer ID Application (G3QZ66475M), hardened runtime, spctl accepted
-- GitLab issues closed: 1 (#33 via "Closes #33" in 3b27824)
-- GitLab issues created: 5 (#33 K2-reopen [now closed], #34 G5 libproc, #35 G2 cwd-detection, #36 G1 auto-dev, #37 B4 proper i18n)
-- Installed locally: `/Applications/DevWatchdog.app` → v3.2.0; backup at `.v3.1.0-backup`
-- App running: PID 27237 (v3.2.0, NSStatusItem path)
+- NEW `DevWatchdog/Services/LibProcProcessEnumerator.swift` (211 LOC)
+- NEW `DevWatchdogTests/LibProcProcessEnumeratorTests.swift` (12 tests)
+- MOD `DevWatchdog/Services/ProcessMonitor.swift` (scan() branch + PSFailureCounter polish)
+- MOD `DevWatchdog/Models/WatchdogConfig.swift` (useLibprocEnumerator @Published Bool)
+- MOD `DevWatchdog/Views/SettingsView.swift` (Entwickler section + toggle)
+- MOD `CHANGELOG.md` ([Unreleased] entry)
 
-## Next Session Recommendations
+## Final Metrics (pre-commit)
 
-- **Priority:** Welle C — pick one of G5 (libproc migration, #34), G2 (cwd-based project detection, #35), G1 (signal-based dev detection, #36). G5 is the prerequisite for G2 and G1.
-- **Type:** `feature` (substantial refactor, dedicated session)
-- **Estimated scope:** 4–6 h for G5 alone, 8–12 h for the full G5+G2+G1 stack
-- **Parallel candidate:** #37 (proper i18n) could run in its own 3–5 h session independent of the libproc work
+- Tests: 335 pass · 1 skipped · 0 failures (was 323)
+- Build: clean, Swift 6 strict-concurrency satisfied
+- Agents dispatched: 6 total (2 Discovery + 3 Impl-Core + 1 Quality + 1 session-reviewer)
+- Wave savings: Wave 3 skipped, Wave 4 compressed from 2 agents to 1
+- Duration: ~1h 20min (12:20 → ~13:40)
+- GitLab note: #note_25891 on issue #34
