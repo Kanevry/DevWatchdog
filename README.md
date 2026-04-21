@@ -59,6 +59,24 @@ Process detected
 
 ## Features
 
+### Emergency Mode (v3.0)
+
+When system load spikes above your configured threshold, DevWatchdog enters **Emergency Mode** and tightens the kill criteria automatically. Suspects with high CPU or RSS get killed faster; whitelisted processes remain protected.
+
+- Trigger: 5-minute load average crosses `emergencyLoadFactor × CPU-count` (default 1.5×)
+- Behaviour: grace period shrinks, `maxRuntime` thresholds compress, `emergencyMinAgeSeconds` prevents killing fresh processes
+- Exits automatically when load returns to normal
+- Fully observable: every Emergency-triggered kill is tagged with its `KillTrigger`/`KillReason` in the session log
+
+### Observability (v3.1)
+
+- **Insights tab** — weekly summary of what was killed, why, which projects/process types dominate, and how many CPU/RSS hours you reclaimed
+- **Dev Filter** — narrow the watch surface to specific path patterns (`inclusionPatterns`) for laser-focused monitoring on a single project
+- **Kill-reason audit** — every kill carries structured `KillTrigger` + `KillReason` metadata (orphan, maxRuntime, emergency-cpu, emergency-rss, manual, rule-override)
+- **Match modes** — rule patterns support `glob`, `regex`, `substring`, and `exact` matching; migration-safe decoder keeps old rules working
+- **Log export** — one-click JSON export (with secret redaction) via pasteboard or NSSavePanel
+- **Structured logger (DWLogger)** — categorized, level-filtered logging; all `SessionLog` calls route through it with `kind→category` mapping
+
 ### Orphan-First Detection
 - **Primary signal**: `isOrphan` (PPID=1) — parent is dead, nobody manages this process
 - **Secondary signal**: `maxRuntime` exceeded — process-type-specific hard kill limits
@@ -125,12 +143,17 @@ Instead of 73 individual alerts:
 
 ### Download (Recommended)
 
-1. Go to [Releases](https://github.com/Kanevry/DevWatchdog/releases)
-2. Download `DevWatchdog.app.zip`
-3. Unzip and drag to `/Applications`
-4. Open DevWatchdog — it appears in your menu bar
+1. Go to [Releases](https://github.com/Kanevry/DevWatchdog/releases/latest)
+2. Download `DevWatchdog-<version>.dmg`
+3. Open the DMG and drag **DevWatchdog** to the **Applications** folder
+4. Launch DevWatchdog — it appears in your menu bar
 
-> **Note**: On first launch, macOS may show a security dialog. Go to **System Settings > Privacy & Security** and click "Open Anyway".
+> **Gatekeeper on first launch.** The DMG is signed with a Developer ID but is **not notarized yet**, so macOS will show a warning the first time you open the app. Two options:
+>
+> - **Right-click → Open** in the Applications folder, then confirm "Open" in the dialog. macOS remembers the choice.
+> - Or, from Terminal: `xattr -d com.apple.quarantine /Applications/DevWatchdog.app`
+>
+> After that, DevWatchdog launches normally. You can verify the signature yourself: `codesign -dv --verbose=4 /Applications/DevWatchdog.app` should show `Developer ID Application: Bernhard Goetzendorfer (G3QZ66475M)`.
 
 ### Build from Source
 

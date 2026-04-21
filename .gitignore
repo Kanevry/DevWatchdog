@@ -27,6 +27,7 @@ Thumbs.db
 *.ipa
 *.dSYM.zip
 *.dSYM
+artifacts/
 
 # Swift Package Manager
 .build/
