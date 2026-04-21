@@ -249,70 +249,105 @@ struct MenuBarView: View {
                 .help("Beendet alle Zombie-Prozesse. Das sind verwaiste (ohne Parent) oder Prozesse, die ihre Max-Laufzeit überschritten haben. Immer sicher — niemand benutzt sie.")
             }
 
-            // Kill All Suspects — ampel color based on risk
-            if monitor.suspectProcesses.count > 1 {
-                let count = monitor.suspectProcesses.count
-                let memMB = monitor.suspectProcesses.reduce(0.0) { $0 + $1.memoryMB }
-                let maxCPU = monitor.suspectProcesses.map(\.cpuPercent).max() ?? 0
-                let riskColor = suspectRiskColor(maxCPU: maxCPU)
-                let riskLabel = suspectRiskLabel(maxCPU: maxCPU)
-                let riskIcon = suspectRiskIcon(maxCPU: maxCPU)
-
-                Button {
-                    monitor.killAllSuspects()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "trash")
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text("\(count) Verdächtige beenden")
-                                .fontWeight(.medium)
-                            Text("\(String(format: "%.0f", memMB)) MB — \(riskLabel)")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                        Spacer()
-                        Image(systemName: riskIcon)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(riskColor)
-                .help(suspectRiskTooltip(maxCPU: maxCPU))
+            // Suspects split by activity: "idle" (safe — CPU ~0) vs. "active"
+            // (a running test/build that a user might still care about). This
+            // lets the user end only the idle ones in one click without
+            // nuking work-in-progress.
+            let split = partitionedSuspects
+            if !split.idle.isEmpty && !split.active.isEmpty {
+                killSuspectsButton(
+                    label: "\(split.idle.count) inaktive Verdächtige beenden",
+                    targets: split.idle,
+                    tint: .green.opacity(0.8),
+                    icon: "checkmark.shield.fill",
+                    detail: "\(formatMB(split.idle)) — 0% CPU, sicher zu beenden",
+                    helpText: "Beendet nur Verdächtige mit ~0% CPU. Laufende Tests/Builds bleiben unangetastet."
+                )
+                killSuspectsButton(
+                    label: "\(split.active.count) aktive Verdächtige beenden",
+                    targets: split.active,
+                    tint: activeButtonTint(split.active),
+                    icon: "exclamationmark.triangle.fill",
+                    detail: "\(formatMB(split.active)) — bis zu \(String(format: "%.0f", maxCPU(split.active)))% CPU — vorsichtig",
+                    helpText: "Beendet nur die aktiven Verdächtigen. Prüfe vorher, ob hier ein laufender Test/Build dabei ist."
+                )
+            } else if !split.idle.isEmpty {
+                killSuspectsButton(
+                    label: "\(split.idle.count) inaktive Verdächtige beenden",
+                    targets: split.idle,
+                    tint: .green.opacity(0.8),
+                    icon: "checkmark.shield.fill",
+                    detail: "\(formatMB(split.idle)) — alle inaktiv, sicher zu beenden",
+                    helpText: "Alle Verdächtigen zeigen 0% CPU — sicher zu beenden."
+                )
+            } else if !split.active.isEmpty, split.active.count > 1 {
+                killSuspectsButton(
+                    label: "\(split.active.count) Verdächtige beenden",
+                    targets: split.active,
+                    tint: activeButtonTint(split.active),
+                    icon: "exclamationmark.triangle.fill",
+                    detail: "\(formatMB(split.active)) — bis zu \(String(format: "%.0f", maxCPU(split.active)))% CPU — vorsichtig",
+                    helpText: "Alle Verdächtigen sind aktiv. Prüfe die Liste auf laufende Tests/Builds vor dem Beenden."
+                )
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
-    // MARK: - Suspect Risk Assessment
-
-    private func suspectRiskColor(maxCPU: Double) -> Color {
-        if maxCPU > 50 { return .red.opacity(0.85) }
-        if maxCPU > 1 { return .orange.opacity(0.85) }
-        return .green.opacity(0.7)
+    /// Partition current suspects into "idle" (~0% CPU — safe to batch-kill)
+    /// and "active" (still consuming CPU — user may care). Threshold set at
+    /// 1% to avoid classifying measurement noise as "active".
+    private var partitionedSuspects: (idle: [DevProcess], active: [DevProcess]) {
+        let suspects = monitor.suspectProcesses
+        let idle = suspects.filter { $0.cpuPercent < 1 }
+        let active = suspects.filter { $0.cpuPercent >= 1 }
+        return (idle, active)
     }
 
-    private func suspectRiskLabel(maxCPU: Double) -> String {
-        if maxCPU > 50 { return "einige aktiv (bis zu \(String(format: "%.0f", maxCPU))% CPU)" }
-        if maxCPU > 1 { return "geringe Aktivität, Prüfung empfohlen" }
-        return "alle inaktiv, sicher zu beenden"
+    private func formatMB(_ list: [DevProcess]) -> String {
+        let mb = list.reduce(0.0) { $0 + $1.memoryMB }
+        return "\(String(format: "%.0f", mb)) MB"
     }
 
-    private func suspectRiskIcon(maxCPU: Double) -> String {
-        if maxCPU > 50 { return "exclamationmark.triangle.fill" }
-        if maxCPU > 1 { return "questionmark.circle.fill" }
-        return "checkmark.shield.fill"
+    private func maxCPU(_ list: [DevProcess]) -> Double {
+        list.map(\.cpuPercent).max() ?? 0
     }
 
-    private func suspectRiskTooltip(maxCPU: Double) -> String {
-        if maxCPU > 50 {
-            return "Einige Verdächtige nutzen aktuell CPU (\(String(format: "%.0f", maxCPU))%). Könnte ein laufender Test oder Build sein — Liste vorher prüfen."
+    private func activeButtonTint(_ list: [DevProcess]) -> Color {
+        maxCPU(list) > 50 ? .red.opacity(0.85) : .orange.opacity(0.85)
+    }
+
+    @ViewBuilder
+    private func killSuspectsButton(
+        label: String,
+        targets: [DevProcess],
+        tint: Color,
+        icon: String,
+        detail: String,
+        helpText: String
+    ) -> some View {
+        Button {
+            monitor.killSuspects(targets)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "trash")
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(label)
+                        .fontWeight(.medium)
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                Spacer()
+                Image(systemName: icon)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity)
         }
-        if maxCPU > 1 {
-            return "Einige Verdächtige zeigen geringe CPU-Aktivität. Wahrscheinlich sicher, aber Liste auf Bekanntes prüfen."
-        }
-        return "Alle Verdächtigen sind bei 0% CPU — inaktive Prozesse, sicher zu beenden."
+        .buttonStyle(.borderedProminent)
+        .tint(tint)
+        .help(helpText)
     }
 
     // MARK: - Empty State

@@ -557,10 +557,18 @@ class ProcessMonitor: ObservableObject {
     }
 
     func killAllSuspects() {
-        let memoryMB = suspectProcesses.reduce(0.0) { $0 + $1.memoryMB }
-        let count = suspectProcesses.count
+        killSuspects(suspectProcesses)
+    }
 
-        for process in suspectProcesses {
+    /// Kill a pre-filtered subset of current suspects. Used by the UI's
+    /// "safe vs. active" split so a user can end only the idle processes
+    /// in one click while leaving their running test/build untouched.
+    func killSuspects(_ targets: [DevProcess]) {
+        let memoryMB = targets.reduce(0.0) { $0 + $1.memoryMB }
+        let count = targets.count
+        let targetPIDs = Set(targets.map(\.pid))
+
+        for process in targets {
             _ = terminator.terminate(
                 pid: process.pid,
                 expectedStart: process.startTimestamp ?? 0,
@@ -575,8 +583,12 @@ class ProcessMonitor: ObservableObject {
                 killReason: reason
             )
         }
-        suspectProcesses.removeAll()
-        allProcesses.removeAll { p in !zombieProcesses.contains(where: { $0.id == p.id }) && !whitelistedProcesses.contains(where: { $0.id == p.id }) }
+        suspectProcesses.removeAll { targetPIDs.contains($0.pid) }
+        allProcesses.removeAll { p in
+            targetPIDs.contains(p.pid)
+                && !zombieProcesses.contains(where: { $0.id == p.id })
+                && !whitelistedProcesses.contains(where: { $0.id == p.id })
+        }
 
         if count > 0 {
             if emergencyState == .emergency {
