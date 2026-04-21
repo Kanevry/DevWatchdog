@@ -2,6 +2,14 @@ import AppKit
 import SwiftUI
 import UserNotifications
 
+/// `NSHostingView` subclass that passes all mouse events through to the
+/// view below. Required for the status-bar button label — without this,
+/// the SwiftUI label absorbs clicks and the NSButton's `action`
+/// (togglePopover) never fires on the second click.
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Owns the status-bar item, the popover that renders ``MenuBarView``, and the
 /// app's termination observer / panic-hotkey lifecycle. Replaces the previous
 /// `MenuBarExtra` scene in ``DevWatchdogApp`` because `MenuBarExtra` caches its
@@ -109,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // @Published changes via SwiftUI's normal mechanism, so icon/count/color
         // transitions flow without the MenuBarExtra snapshot-cache bug.
         let label = MenuBarLabel(monitor: monitor)
-        let hosting = NSHostingView(rootView: label)
+        let hosting = PassthroughHostingView(rootView: label)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -160,10 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            // LSUIElement apps need explicit activation before the popover's
+            // host window can become key. Without this, SwiftUI buttons inside
+            // the popover never receive clicks and `.transient` dismissal
+            // can't detect outside activity. See issue #38.
+            NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            // Without this, SwiftUI `.keyboardShortcut(...)` modifiers inside
-            // the popover don't fire — the popover's content window is not
-            // key on present.
             popover.contentViewController?.view.window?.makeKey()
         }
     }
