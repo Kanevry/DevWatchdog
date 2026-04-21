@@ -65,6 +65,16 @@ class ProcessMonitor: ObservableObject {
     private var pendingKills: [Int32: (firstSeen: Date, gracePeriod: TimeInterval)] = [:]
     // Track which zombie batches we already notified about (to avoid repeat alerts)
     private var notifiedZombiePIDs: Set<Int32> = []
+    /// PPID observed for each PID on the previous scan. Used to distinguish
+    /// "newly reparented to launchd" (high confidence orphan) from "has always
+    /// been under launchd" (might be a long-running daemon, not an orphan).
+    /// Capped at 4,096 PIDs — prevents unbounded growth across long sessions.
+    private var ppidHistory: [Int32: Int32] = [:]
+    private static let ppidHistoryCap = 4_096
+    /// Shorter grace period applied to `.reparented` zombies — their parent
+    /// *just* died, so there is no reason to wait out the full orphan timeout.
+    /// Still respects the global grace-period for user intervention.
+    static let reparentedOrphanFastTrackSeconds: TimeInterval = 30
 
     func start(config: WatchdogConfig) {
         self.config = config
@@ -126,6 +136,7 @@ class ProcessMonitor: ObservableObject {
         cancellables.removeAll()
         pendingKills.removeAll()
         notifiedZombiePIDs.removeAll()
+        ppidHistory.removeAll()
         lastHighSeenAt = nil
         emergencyEnteredAt = nil
         emergencyKillCount = 0
@@ -148,10 +159,18 @@ class ProcessMonitor: ObservableObject {
         let excludedApps = config?.excludedApps ?? WatchdogConfig.defaultExcludedApps
         let inclusionPatterns = config?.inclusionPatterns ?? WatchdogConfig.defaultInclusionPatterns
         let psTimeout = config?.psTimeoutSeconds ?? 10
-        let processes = await Task.detached {
+        let rawProcesses = await Task.detached {
             PSParser.parseProcessList(excludedApps: excludedApps, inclusionPatterns: inclusionPatterns, timeout: psTimeout)
         }.value
         self.psFailureSpike = PSFailureCounter.shared.failureSpike
+
+        // Enrich each process with PPID-history-derived orphan confidence.
+        // Executes on MainActor so it has safe access to `ppidHistory`.
+        let processes = rawProcesses.map { p -> DevProcess in
+            let confidence = classifyOrphanConfidence(pid: p.pid, currentPPID: p.parentPID)
+            return p.withOrphanConfidence(confidence)
+        }
+        updatePPIDHistory(from: rawProcesses)
 
         guard let config else { return }
 
@@ -159,21 +178,69 @@ class ProcessMonitor: ObservableObject {
         var suspects: [DevProcess] = []
         var whitelisted: [DevProcess] = []
 
-        for process in processes {
+        for rawProcess in processes {
             // STAGE 1: Whitelisted -> protect
-            if config.isWhitelisted(process) {
-                whitelisted.append(process)
+            if config.isWhitelisted(rawProcess) {
+                whitelisted.append(rawProcess.withSignals(.empty))
                 continue
             }
 
-            // STAGE 2: Orphan + old enough -> ZOMBIE (auto-kill)
-            if process.isOrphan && (process.runtime ?? 0) >= config.orphanTimeout {
-                zombies.append(process)
-                continue
+            // Pre-compute once per process so both classification and signal
+            // analysis see the same rule / hard-kill decisions.
+            let matchingRule = config.matchingRule(for: rawProcess)
+            let hardKillTrigger = matchingRule
+                .flatMap { rule -> String? in
+                    // Order matters: runtime first (most interpretable to the user),
+                    // then CPU, then RSS. Only report the first tripped threshold.
+                    guard rule.shouldHardKill(rawProcess) else { return nil }
+                    if rule.maxRuntime > 0, (rawProcess.runtime ?? 0) >= rule.maxRuntime {
+                        return "runtime"
+                    }
+                    if rule.maxCPUPercent > 0, rawProcess.cpuPercent >= rule.maxCPUPercent {
+                        return "CPU"
+                    }
+                    if rule.maxRSSMB > 0, rawProcess.memoryMB >= rule.maxRSSMB {
+                        return "RSS"
+                    }
+                    return nil
+                }
+            let runtime = rawProcess.runtime ?? 0
+            let catchAllExceeded = config.catchAllMaxRuntime > 0
+                && runtime >= config.catchAllMaxRuntime
+
+            let signals = ProcessSignalsAnalyzer.analyze(
+                rawProcess,
+                rule: matchingRule,
+                hardKillTrigger: hardKillTrigger,
+                catchAllExceeded: catchAllExceeded
+            )
+            let process = rawProcess.withSignals(signals)
+
+            // STAGE 2: Orphan + old enough -> ZOMBIE (auto-kill).
+            //
+            // Confidence-tiered rule:
+            // - `.reparented` = parent just died. Skip the full orphan-timeout
+            //   and zombify after the fast-track threshold (30 s). The kernel
+            //   has told us this process is really dead weight.
+            // - `.knownSinceFirstSeen` = PPID was 1 the first time we saw it.
+            //   Could be a launchd daemon the user wants kept alive. Keep the
+            //   conservative `config.orphanTimeout` (default 120 s).
+            if process.isOrphan {
+                let threshold: TimeInterval
+                switch process.orphanConfidence {
+                case .reparented:
+                    threshold = min(Self.reparentedOrphanFastTrackSeconds, config.orphanTimeout)
+                case .knownSinceFirstSeen, .none:
+                    threshold = config.orphanTimeout
+                }
+                if runtime >= threshold {
+                    zombies.append(process)
+                    continue
+                }
             }
 
             // STAGE 3: Rule-based (for non-orphans and young orphans)
-            if let rule = config.matchingRule(for: process) {
+            if let rule = matchingRule {
                 // Hard kill limits (runtime/CPU%/RSS) exceeded → zombie
                 if rule.shouldHardKill(process) {
                     zombies.append(process)
@@ -187,8 +254,7 @@ class ProcessMonitor: ObservableObject {
             }
 
             // STAGE 4: General heuristic (no matching rule)
-            let runtime = process.runtime ?? 0
-            if config.catchAllMaxRuntime > 0 && runtime >= config.catchAllMaxRuntime {
+            if catchAllExceeded {
                 // Any dev process running longer than catch-all limit → zombie
                 zombies.append(process)
             } else if process.isOrphan {
@@ -622,6 +688,46 @@ class ProcessMonitor: ObservableObject {
             actualValue: process.runtime ?? 0,
             unit: "s"
         )
+    }
+
+    // MARK: - Orphan confidence
+
+    /// Look up this PID's prior-observed PPID and classify confidence.
+    ///
+    /// - `currentPPID != 1` → `.none` (not orphaned at all).
+    /// - No prior observation AND `currentPPID == 1` → `.knownSinceFirstSeen`
+    ///   (conservative: maybe a daemon).
+    /// - Prior PPID `!= 1`, now `== 1` → `.reparented` (real orphaning — act fast).
+    /// - Prior PPID `== 1`, now `== 1` → `.knownSinceFirstSeen` (stable under launchd).
+    internal func classifyOrphanConfidence(pid: Int32, currentPPID: Int32) -> OrphanConfidence {
+        guard currentPPID == 1 else { return .none }
+        guard let priorPPID = ppidHistory[pid] else {
+            return .knownSinceFirstSeen
+        }
+        return priorPPID != 1 ? .reparented : .knownSinceFirstSeen
+    }
+
+    /// Exposed for tests — inject prior-PPID history directly instead of
+    /// driving `scan()` with a live `/bin/ps` subprocess.
+    internal func _testing_setPPIDHistory(_ mapping: [Int32: Int32]) {
+        self.ppidHistory = mapping
+    }
+
+    /// Record each process's current PPID for the next scan's comparison.
+    /// Drops entries for PIDs that are no longer present (prevents unbounded
+    /// growth across very long sessions) and hard-caps at ``ppidHistoryCap``.
+    private func updatePPIDHistory(from processes: [DevProcess]) {
+        let currentPIDs = Set(processes.map(\.pid))
+        ppidHistory = ppidHistory.filter { currentPIDs.contains($0.key) }
+        for p in processes {
+            ppidHistory[p.pid] = p.parentPID
+        }
+        if ppidHistory.count > Self.ppidHistoryCap {
+            // Deterministic pruning: drop lowest PIDs first (they are oldest in
+            // monotonic allocation terms, though the kernel may reuse PIDs).
+            let keep = ppidHistory.keys.sorted(by: >).prefix(Self.ppidHistoryCap)
+            ppidHistory = Dictionary(uniqueKeysWithValues: keep.map { ($0, ppidHistory[$0]!) })
+        }
     }
 
     private func scheduleTimer() {

@@ -26,6 +26,24 @@ enum ProcessState: String, Sendable, Codable, Hashable {
     }
 }
 
+/// Confidence that a process is a true orphan — i.e. its parent really died,
+/// rather than it having been spawned under launchd (PID 1) from the start.
+///
+/// Raised by the scan pipeline when the parent-PID history shows a transition
+/// `PPID != 1 → PPID == 1` between observations. Processes that were first
+/// seen already under PID 1 (daemons, services, backgrounded jobs) get
+/// `.knownSinceFirstSeen`, which the classifier treats with the standard
+/// orphan-timeout grace. A `.reparented` process is the high-confidence case
+/// — kill with shorter grace.
+enum OrphanConfidence: String, Sendable, Codable, Hashable {
+    /// Not an orphan (parent != 1).
+    case none
+    /// Observed under PID 1 on first scan; could be launchd-adopted forever.
+    case knownSinceFirstSeen
+    /// Parent transitioned `X → 1` between observations — really orphaned.
+    case reparented
+}
+
 struct DevProcess: Identifiable, Hashable, Sendable {
     let id: Int32 // PID
     let user: String
@@ -40,6 +58,12 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     let parentPID: Int32
     let isOrphan: Bool
     let state: ProcessState
+    /// Set by ``ProcessMonitor`` during scan enrichment (default `.none`).
+    /// Not produced by `PSParser`.
+    let orphanConfidence: OrphanConfidence
+    /// "Why is this on the list" explainer — computed by
+    /// ``ProcessSignalsAnalyzer`` during scan enrichment. Default: empty.
+    let signals: ProcessSignals
 
     init(
         id: Int32,
@@ -52,7 +76,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         parentPID: Int32,
         isOrphan: Bool,
         state: ProcessState = .unknown,
-        startTimestamp: Int64? = nil
+        startTimestamp: Int64? = nil,
+        orphanConfidence: OrphanConfidence = .none,
+        signals: ProcessSignals = .empty
     ) {
         self.id = id
         self.user = user
@@ -65,6 +91,40 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         self.isOrphan = isOrphan
         self.state = state
         self.startTimestamp = startTimestamp
+        self.orphanConfidence = orphanConfidence
+        self.signals = signals
+    }
+
+    /// Return a copy with `orphanConfidence` set. Used by ``ProcessMonitor``
+    /// to enrich raw `PSParser` output with PPID-history-derived signals.
+    func withOrphanConfidence(_ confidence: OrphanConfidence) -> DevProcess {
+        DevProcess(
+            id: id, user: user,
+            cpuPercent: cpuPercent, memPercent: memPercent,
+            rss: rss, command: command,
+            startTime: startTime,
+            parentPID: parentPID, isOrphan: isOrphan,
+            state: state,
+            startTimestamp: startTimestamp,
+            orphanConfidence: confidence,
+            signals: signals
+        )
+    }
+
+    /// Return a copy with the signal bundle set. Used by ``ProcessMonitor``
+    /// after running `ProcessSignalsAnalyzer`.
+    func withSignals(_ signals: ProcessSignals) -> DevProcess {
+        DevProcess(
+            id: id, user: user,
+            cpuPercent: cpuPercent, memPercent: memPercent,
+            rss: rss, command: command,
+            startTime: startTime,
+            parentPID: parentPID, isOrphan: isOrphan,
+            state: state,
+            startTimestamp: startTimestamp,
+            orphanConfidence: orphanConfidence,
+            signals: signals
+        )
     }
 
     var pid: Int32 { id }
