@@ -36,7 +36,7 @@ struct SessionLogView: View {
 
     private var header: some View {
         HStack {
-            Text("Session Log")
+            Text("Session-Protokoll")
                 .font(.headline)
             Spacer()
             Text("\(log.entries.count) Einträge")

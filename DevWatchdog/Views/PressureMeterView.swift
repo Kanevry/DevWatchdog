@@ -49,9 +49,10 @@ struct PressureMeterView: View {
                         Text(memoryMetricText(snapshot: snapshot))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(memoryMetricColor(snapshot: snapshot))
-                        if snapshot.compressionRate >= 100 {
-                            // Sustained compression activity — a tie-break signal
-                            // when absolute MB alone is not enough.
+                        // Rate label only makes sense when the row shows "Compressed" — when
+                        // the row flips to "Swap" (swap usage dominant), the compressionRate
+                        // number is still about the compressor and would mislead.
+                        if snapshot.compressionRate >= 100, memoryLabelForMetric(snapshot: snapshot) == "Compressed" {
                             Text(String(format: "↑ %.0f/s", snapshot.compressionRate))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.orange)

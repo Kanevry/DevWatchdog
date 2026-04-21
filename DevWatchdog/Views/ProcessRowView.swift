@@ -4,9 +4,7 @@ struct ProcessRowView: View {
     let process: DevProcess
     let isZombie: Bool
     var onKill: () -> Void
-    // TODO: wire onThrottle from MenuBarView to monitor.throttleProcess
     var onThrottle: (() -> Void)? = nil
-    // TODO: wire onResume from MenuBarView to monitor.resumeProcess
     var onResume: (() -> Void)? = nil
 
     @State private var isHovered = false
@@ -261,9 +259,16 @@ struct ProcessRowView: View {
         }
     }
 
+    /// CPU severity color scaled by core count. On a 12-core machine, 100%
+    /// CPU is ~8% of total capacity — not alarming; on a 2-core machine,
+    /// 50% already halves the box. We express thresholds as a fraction of
+    /// total system capacity: ≥15% red, ≥5% orange.
     private var cpuColor: Color {
-        if process.cpuPercent >= 100 { return .red }
-        if process.cpuPercent >= 50 { return .orange }
+        let ncpu = Double(ProcessInfo.processInfo.activeProcessorCount)
+        guard ncpu > 0 else { return .primary }
+        let fraction = process.cpuPercent / (ncpu * 100)
+        if fraction >= 0.15 { return .red }
+        if fraction >= 0.05 { return .orange }
         return .primary
     }
 }

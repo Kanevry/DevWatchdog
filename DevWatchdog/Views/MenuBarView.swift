@@ -35,7 +35,7 @@ struct MenuBarView: View {
             Divider()
 
             // Sticky action bar (always visible)
-            if !monitor.zombieProcesses.isEmpty || !monitor.suspectProcesses.isEmpty {
+            if hasActionBarContent {
                 actionBar
                 Divider()
             }
@@ -68,7 +68,7 @@ struct MenuBarView: View {
             // Footer actions
             footerSection
         }
-        .frame(width: 380)
+        .frame(width: 400)
         .animation(.easeInOut(duration: 0.25), value: monitor.emergencyState)
         .animation(.easeInOut(duration: 0.25), value: monitor.pressure != nil)
         .sheet(isPresented: $showOnboarding) {
@@ -121,6 +121,7 @@ struct MenuBarView: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
+                .frame(minWidth: 90, alignment: .trailing)
             }
         }
         .padding(.horizontal, 12)
@@ -159,14 +160,26 @@ struct MenuBarView: View {
                 runPanic()
             }
         } label: {
-            Label("Panic", systemImage: "bolt.fill")
-                .font(.caption)
-                .fontWeight(.semibold)
+            // Icon-only at rest — Panic is the nuclear option, but granular
+            // CTAs in the body do the primary work. Show count as a small
+            // badge only when targets are many (≥10) so the button scales
+            // from "hint" to "warning" visually.
+            HStack(spacing: 3) {
+                Image(systemName: "bolt.fill")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                if panicTargetCount >= 10 {
+                    Text("\(panicTargetCount)")
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .monospacedDigit()
+                }
+            }
         }
         .buttonStyle(.borderedProminent)
         .tint(.red)
         .controlSize(.small)
-        .help("Alle Zombies und Verdächtigen sofort beenden (⌘⇧⌥P).")
+        .help("Panic — alle \(panicTargetCount) Zombies und Verdächtigen sofort beenden (⌘⇧⌥P).")
         .accessibilityLabel("Panic — \(panicTargetCount) Prozesse beenden")
     }
 
@@ -295,6 +308,18 @@ struct MenuBarView: View {
         .padding(.vertical, 8)
     }
 
+    /// True if at least one CTA would actually render in the action bar.
+    /// Prevents the container from rendering with just padding when we have
+    /// exactly one active suspect (which no CTA currently handles — that's
+    /// the user's cue to inspect the row and decide manually).
+    private var hasActionBarContent: Bool {
+        if !monitor.zombieProcesses.isEmpty { return true }
+        let split = partitionedSuspects
+        if !split.idle.isEmpty { return true }
+        if split.active.count > 1 { return true }
+        return false
+    }
+
     /// Partition current suspects into "idle" (~0% CPU — safe to batch-kill)
     /// and "active" (still consuming CPU — user may care). Threshold set at
     /// 1% to avoid classifying measurement noise as "active".
@@ -357,14 +382,35 @@ struct MenuBarView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 32))
                 .foregroundStyle(.green)
-            Text("Alles sauber")
+            Text(emptyStateTitle)
                 .font(.headline)
-            Text("Keine Zombie-Prozesse erkannt")
+            Text(emptyStateSubtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
+        .padding(.horizontal, 16)
+    }
+
+    private var emptyStateTitle: String {
+        switch monitor.emergencyState {
+        case .emergency: return "Keine Targets mehr"
+        case .elevated:  return "Vorerst sauber"
+        case .normal:    return "Alles sauber"
+        }
+    }
+
+    private var emptyStateSubtitle: String {
+        switch monitor.emergencyState {
+        case .emergency:
+            return "System-Druck noch hoch — Scanner läuft weiter, greift bei neuen Zombies sofort zu."
+        case .elevated:
+            return "Keine Zombie-Prozesse erkannt. Erhöhter System-Druck wird beobachtet."
+        case .normal:
+            return "Keine Zombie-Prozesse erkannt"
+        }
     }
 
     // MARK: - Zombie Section
@@ -389,13 +435,18 @@ struct MenuBarView: View {
                         onResume: { monitor.resumeProcess(group.processes[0]) }
                     )
                 } else {
-                    ProcessGroupRowView(group: group, isZombie: true) { process in
-                        monitor.killProcess(process)
-                    } onKillGroup: {
-                        for process in group.processes {
-                            monitor.killProcess(process)
-                        }
-                    }
+                    ProcessGroupRowView(
+                        group: group,
+                        isZombie: true,
+                        onKill: { process in monitor.killProcess(process) },
+                        onKillGroup: {
+                            for process in group.processes {
+                                monitor.killProcess(process)
+                            }
+                        },
+                        onThrottle: { process in monitor.throttleProcess(process) },
+                        onResume: { process in monitor.resumeProcess(process) }
+                    )
                 }
             }
         }
@@ -423,13 +474,18 @@ struct MenuBarView: View {
                         onResume: { monitor.resumeProcess(group.processes[0]) }
                     )
                 } else {
-                    ProcessGroupRowView(group: group, isZombie: false) { process in
-                        monitor.killProcess(process)
-                    } onKillGroup: {
-                        for process in group.processes {
-                            monitor.killProcess(process)
-                        }
-                    }
+                    ProcessGroupRowView(
+                        group: group,
+                        isZombie: false,
+                        onKill: { process in monitor.killProcess(process) },
+                        onKillGroup: {
+                            for process in group.processes {
+                                monitor.killProcess(process)
+                            }
+                        },
+                        onThrottle: { process in monitor.throttleProcess(process) },
+                        onResume: { process in monitor.resumeProcess(process) }
+                    )
                 }
             }
         }
@@ -493,9 +549,9 @@ struct MenuBarView: View {
             Button {
                 showSessionLog = true
             } label: {
-                Label("Log", systemImage: "list.bullet.rectangle")
+                Label("Protokoll", systemImage: "list.bullet.rectangle")
             }
-            .help("Session-Log öffnen — alle Kill/Pause/Resume-Events dieser Session")
+            .help("Protokoll öffnen — alle Kill/Pause/Resume-Events dieser Session")
 
             Button {
                 openSettings()
@@ -540,8 +596,19 @@ struct ProcessGroupRowView: View {
     let isZombie: Bool
     var onKill: (DevProcess) -> Void
     var onKillGroup: () -> Void
+    var onThrottle: ((DevProcess) -> Void)? = nil
+    var onResume: ((DevProcess) -> Void)? = nil
 
     @State private var isExpanded = false
+
+    private var groupCPUColor: Color {
+        let ncpu = Double(ProcessInfo.processInfo.activeProcessorCount)
+        guard ncpu > 0 else { return .secondary }
+        let fraction = group.maxCPU / (ncpu * 100)
+        if fraction >= 0.15 { return .red }
+        if fraction >= 0.05 { return .orange }
+        return .secondary
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -581,7 +648,7 @@ struct ProcessGroupRowView: View {
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(String(format: "%.0f%% CPU", group.totalCPU))
                             .font(.caption2)
-                            .foregroundStyle(group.maxCPU >= 50 ? .orange : .secondary)
+                            .foregroundStyle(groupCPUColor)
                         Text(String(format: "%.0f MB", group.totalMemoryMB))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -606,9 +673,13 @@ struct ProcessGroupRowView: View {
             // Expanded: show individual processes
             if isExpanded {
                 ForEach(group.processes) { process in
-                    ProcessRowView(process: process, isZombie: isZombie) {
-                        onKill(process)
-                    }
+                    ProcessRowView(
+                        process: process,
+                        isZombie: isZombie,
+                        onKill: { onKill(process) },
+                        onThrottle: onThrottle.map { handler in { handler(process) } },
+                        onResume: onResume.map { handler in { handler(process) } }
+                    )
                     .padding(.leading, 18)
                 }
             }
