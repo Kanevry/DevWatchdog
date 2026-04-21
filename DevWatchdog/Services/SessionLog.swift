@@ -31,7 +31,7 @@ struct KillReason: Sendable, Hashable, Codable {
 /// Everything relevant to the UI row is captured here — timestamp,
 /// kind (used for icon/colour), human-readable message, and optional
 /// PID/process-name context for diagnostics.
-struct SessionLogEntry: Identifiable, Sendable, Hashable {
+struct SessionLogEntry: Identifiable, Sendable, Hashable, Codable {
     let id: UUID
     let timestamp: Date
     let kind: Kind
@@ -40,7 +40,7 @@ struct SessionLogEntry: Identifiable, Sendable, Hashable {
     let processName: String?
     let killReason: KillReason?
 
-    enum Kind: String, Sendable, Hashable {
+    enum Kind: String, Sendable, Hashable, Codable {
         case kill
         case throttle
         case resume
@@ -82,16 +82,46 @@ final class SessionLog: ObservableObject {
     /// Maximum number of entries kept in memory. Fixed at construction time.
     let capacity: Int
 
-    init(capacity: Int = 500) {
+    /// When `true`, new entries are forwarded to
+    /// ``SessionLogPersistence.shared`` so they survive app restarts and
+    /// ``InsightsEngine`` can see a week+ of history. Defaults to `true`;
+    /// can be disabled for tests that want a pure in-memory log.
+    let persistsToDisk: Bool
+
+    init(capacity: Int = 500, persistsToDisk: Bool = true, hydrateFromDisk: Bool = true) {
         self.capacity = capacity
+        self.persistsToDisk = persistsToDisk
+        if persistsToDisk && hydrateFromDisk {
+            // Load the last 24 h so the UI has recent history right after
+            // launch instead of an empty log. Also kick off rotation so old
+            // files don't pile up.
+            Task {
+                let recent = await SessionLogPersistence.shared.recent(days: 1)
+                await SessionLogPersistence.shared.purgeOld()
+                await MainActor.run {
+                    // Insert oldest-first so ordering matches in-session appends.
+                    let sorted = recent.sorted(by: { $0.timestamp < $1.timestamp })
+                    // Cap by capacity — persistence may return more than fits.
+                    let fit = sorted.suffix(self.capacity)
+                    self.entries = Array(fit)
+                }
+            }
+        }
     }
 
     /// Append a new entry. If `capacity` would be exceeded, the oldest entry
-    /// is removed first so the buffer size stays bounded.
+    /// is removed first so the buffer size stays bounded. When persistence is
+    /// enabled the entry is additionally forwarded to the on-disk JSONL file
+    /// via a detached Task so MainActor is never blocked on I/O.
     func append(_ entry: SessionLogEntry) {
         entries.append(entry)
         if entries.count > capacity {
             entries.removeFirst(entries.count - capacity)
+        }
+        if persistsToDisk {
+            Task {
+                await SessionLogPersistence.shared.append(entry)
+            }
         }
     }
 
