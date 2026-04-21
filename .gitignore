@@ -29,6 +29,10 @@ Thumbs.db
 *.dSYM
 artifacts/
 
+# Coverage / profiling artifacts (leaked by xcodebuild test)
+*.profraw
+*.profdata
+
 # Swift Package Manager
 .build/
 Packages/

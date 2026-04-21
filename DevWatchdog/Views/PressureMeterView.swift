@@ -39,15 +39,25 @@ struct PressureMeterView: View {
                     .gridCellColumns(2)
                 }
 
-                // Swap row
+                // Compressor / swap row — on Apple Silicon the compressor is
+                // the active signal; swap stays ~0. Show whichever is higher.
                 GridRow {
-                    Text("Swap")
+                    Text(memoryLabelForMetric(snapshot: snapshot))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(swapLabel(used: snapshot.swapUsedMB, total: snapshot.swapTotalMB))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(swapColor(fraction: snapshot.swapUsageFraction))
-                        .gridCellColumns(2)
+                    HStack(spacing: 4) {
+                        Text(memoryMetricText(snapshot: snapshot))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(memoryMetricColor(snapshot: snapshot))
+                        if snapshot.compressionRate >= 100 {
+                            // Sustained compression activity — a tie-break signal
+                            // when absolute MB alone is not enough.
+                            Text(String(format: "↑ %.0f/s", snapshot.compressionRate))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .gridCellColumns(2)
                 }
             }
             .padding(.horizontal, 12)
@@ -105,15 +115,31 @@ struct PressureMeterView: View {
         return .green
     }
 
-    // MARK: - Swap
+    // MARK: - Memory metric (compressor / swap)
 
-    private func swapLabel(used: Double, total: Double) -> String {
-        let usedGB = used / 1024
-        let totalGB = total / 1024
-        return String(format: "%.1f / %.1f GB", usedGB, totalGB)
+    /// Row label. Shows "Compressed" normally; switches to "Swap" if the user
+    /// has actual swap usage (rare on M-series) so the underlying number is
+    /// unambiguous.
+    private func memoryLabelForMetric(snapshot: SystemPressureSnapshot) -> String {
+        snapshot.swapUsageFraction > snapshot.compressorFraction ? "Swap" : "Compressed"
     }
 
-    private func swapColor(fraction: Double) -> Color {
+    /// Formatted value for whichever metric is active (compressor or swap).
+    private func memoryMetricText(snapshot: SystemPressureSnapshot) -> String {
+        if snapshot.swapUsageFraction > snapshot.compressorFraction {
+            let usedGB = snapshot.swapUsedMB / 1024
+            let totalGB = snapshot.swapTotalMB / 1024
+            return String(format: "%.1f / %.1f GB", usedGB, totalGB)
+        }
+        let mb = snapshot.compressorUsedMB
+        if mb >= 1024 {
+            return String(format: "%.1f GB", mb / 1024)
+        }
+        return String(format: "%.0f MB", mb)
+    }
+
+    private func memoryMetricColor(snapshot: SystemPressureSnapshot) -> Color {
+        let fraction = snapshot.memoryUsageFraction
         if fraction >= 0.8 { return .red }
         if fraction >= 0.3 { return .orange }
         return .green
@@ -124,7 +150,8 @@ struct PressureMeterView: View {
     private func accessibilitySummary(for snapshot: SystemPressureSnapshot) -> String {
         let mem = memoryLabel(for: snapshot.memoryPressure)
         let load = String(format: "%.1f×", snapshot.loadFactor)
-        let swap = swapLabel(used: snapshot.swapUsedMB, total: snapshot.swapTotalMB)
-        return "System-Druck. Memory \(mem). Last \(load) auf \(snapshot.ncpu) Kernen. Swap \(swap)."
+        let label = memoryLabelForMetric(snapshot: snapshot)
+        let value = memoryMetricText(snapshot: snapshot)
+        return "System-Druck. Memory \(mem). Last \(load) auf \(snapshot.ncpu) Kernen. \(label) \(value)."
     }
 }

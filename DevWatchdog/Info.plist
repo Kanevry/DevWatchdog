@@ -10,10 +10,6 @@
 	<string>DevWatchdog</string>
 	<key>CFBundleIdentifier</key>
 	<string>at.kanevry.DevWatchdog</string>
-	<key>CFBundleVersion</key>
-	<string>2</string>
-	<key>CFBundleShortVersionString</key>
-	<string>2.0.0</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSMinimumSystemVersion</key>

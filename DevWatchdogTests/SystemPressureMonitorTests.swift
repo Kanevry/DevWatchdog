@@ -42,13 +42,50 @@ final class SystemPressureMonitorTests: XCTestCase {
         XCTAssertEqual(snap.swapUsageFraction, 0)
     }
 
+    // MARK: - Compressor / memory-fraction math
+
+    func testCompressorFraction() {
+        let snap = makeSnapshot(compressorMB: 2048, physicalMB: 8192)
+        XCTAssertEqual(snap.compressorFraction, 0.25, accuracy: 0.0001)
+    }
+
+    func testCompressorFractionClampsAtOne() {
+        // If the kernel reports more compressor pages than physical RAM (shouldn't
+        // happen, but be defensive), clamp to 1.0 so derivation thresholds still apply.
+        let snap = makeSnapshot(compressorMB: 16_384, physicalMB: 8192)
+        XCTAssertEqual(snap.compressorFraction, 1.0, accuracy: 0.0001)
+    }
+
+    func testCompressorFractionWithZeroPhysicalIsZero() {
+        let snap = makeSnapshot(compressorMB: 2048, physicalMB: 0)
+        XCTAssertEqual(snap.compressorFraction, 0)
+    }
+
+    func testMemoryUsageFractionPrefersCompressor() {
+        // Apple Silicon case: zero swap, high compressor.
+        let snap = makeSnapshot(
+            swapUsed: 0, swapTotal: 0,
+            compressorMB: 6144, physicalMB: 8192
+        )
+        XCTAssertEqual(snap.memoryUsageFraction, 0.75, accuracy: 0.0001)
+    }
+
+    func testMemoryUsageFractionPrefersSwap() {
+        // Intel / swap-heavy case: high swap, no compressor reported.
+        let snap = makeSnapshot(
+            swapUsed: 1800, swapTotal: 2000,
+            compressorMB: 100, physicalMB: 8192
+        )
+        XCTAssertEqual(snap.memoryUsageFraction, 0.9, accuracy: 0.0001)
+    }
+
     // MARK: - Level derivation
 
     func testDeriveNormal() {
         let level = PressureDeriver.derive(
             memoryPressure: .normal,
             loadFactor: 0.3,
-            swapUsageFraction: 0.1
+            memoryUsageFraction: 0.1
         )
         XCTAssertEqual(level, .normal)
     }
@@ -57,7 +94,7 @@ final class SystemPressureMonitorTests: XCTestCase {
         let level = PressureDeriver.derive(
             memoryPressure: .normal,
             loadFactor: 1.5,
-            swapUsageFraction: 0.0
+            memoryUsageFraction: 0.0
         )
         XCTAssertEqual(level, .elevated)
     }
@@ -66,16 +103,16 @@ final class SystemPressureMonitorTests: XCTestCase {
         let level = PressureDeriver.derive(
             memoryPressure: .critical,
             loadFactor: 0.1,
-            swapUsageFraction: 0.0
+            memoryUsageFraction: 0.0
         )
         XCTAssertEqual(level, .critical)
     }
 
-    func testDeriveCriticalFromSwap() {
+    func testDeriveCriticalFromMemoryFraction() {
         let level = PressureDeriver.derive(
             memoryPressure: .normal,
             loadFactor: 0.1,
-            swapUsageFraction: 0.95
+            memoryUsageFraction: 0.95
         )
         XCTAssertEqual(level, .critical)
     }
@@ -84,16 +121,16 @@ final class SystemPressureMonitorTests: XCTestCase {
         let level = PressureDeriver.derive(
             memoryPressure: .normal,
             loadFactor: 2.5,
-            swapUsageFraction: 0.0
+            memoryUsageFraction: 0.0
         )
         XCTAssertEqual(level, .critical)
     }
 
-    func testDeriveElevatedFromSwap() {
+    func testDeriveElevatedFromMemoryFraction() {
         let level = PressureDeriver.derive(
             memoryPressure: .normal,
             loadFactor: 0.0,
-            swapUsageFraction: 0.75
+            memoryUsageFraction: 0.75
         )
         XCTAssertEqual(level, .elevated)
     }
@@ -102,7 +139,7 @@ final class SystemPressureMonitorTests: XCTestCase {
         let level = PressureDeriver.derive(
             memoryPressure: .elevated,
             loadFactor: 0.0,
-            swapUsageFraction: 0.0
+            memoryUsageFraction: 0.0
         )
         XCTAssertEqual(level, .elevated)
     }
@@ -128,6 +165,51 @@ final class SystemPressureMonitorTests: XCTestCase {
         if swap.totalMB > 0 {
             XCTAssertLessThanOrEqual(swap.usedMB, swap.totalMB + 1) // tolerate rounding
         }
+    }
+
+    func testSysctlPhysicalMemoryPositive() {
+        XCTAssertGreaterThan(SysctlReader.physicalMemoryMB(), 0)
+    }
+
+    func testVMStatsReaderSampleSucceeds() {
+        let sample = VMStatsReader.sample()
+        XCTAssertNotNil(sample, "host_statistics64 should never fail on a healthy host")
+        guard let sample else { return }
+        // Page size on macOS is 4K (Intel) or 16K (Apple Silicon).
+        XCTAssertTrue(sample.pageSize == 4096 || sample.pageSize == 16384,
+                      "unexpected page size \(sample.pageSize)")
+        XCTAssertGreaterThanOrEqual(sample.compressions, 0)
+    }
+
+    func testVMStatsReaderRateIsNonNegative() {
+        guard let first = VMStatsReader.sample() else {
+            XCTFail("sample() returned nil")
+            return
+        }
+        // Forge a second sample with artificially increased compressions.
+        let second = VMStatsSample(
+            pageSize: first.pageSize,
+            compressorPages: first.compressorPages,
+            compressions: first.compressions + 5_000,
+            decompressions: first.decompressions,
+            timestamp: first.timestamp.addingTimeInterval(5)
+        )
+        let rate = VMStatsReader.compressionRate(previous: first, current: second)
+        XCTAssertEqual(rate, 1000, accuracy: 0.1)
+    }
+
+    func testVMStatsReaderRateZeroOnRegression() {
+        let first = VMStatsSample(
+            pageSize: 16384, compressorPages: 0,
+            compressions: 1000, decompressions: 0,
+            timestamp: Date(timeIntervalSince1970: 0)
+        )
+        let second = VMStatsSample(
+            pageSize: 16384, compressorPages: 0,
+            compressions: 500, decompressions: 0, // went DOWN
+            timestamp: Date(timeIntervalSince1970: 5)
+        )
+        XCTAssertEqual(VMStatsReader.compressionRate(previous: first, current: second), 0)
     }
 
     // MARK: - Live dispatch source wiring (regression)
@@ -164,7 +246,7 @@ final class SystemPressureMonitorTests: XCTestCase {
         await fulfillment(of: [exp], timeout: 10.0)
 
         cancellable.cancel()
-        await monitor.stop()
+        monitor.stop()
     }
 
     // MARK: - FakeSystemPressureSource wiring
@@ -191,6 +273,9 @@ final class SystemPressureMonitorTests: XCTestCase {
         ncpu: Int = 8,
         swapUsed: Double = 0,
         swapTotal: Double = 0,
+        compressorMB: Double = 0,
+        physicalMB: Double = 0,
+        compressionRate: Double = 0,
         level: PressureLevel = .normal
     ) -> SystemPressureSnapshot {
         SystemPressureSnapshot(
@@ -200,6 +285,9 @@ final class SystemPressureMonitorTests: XCTestCase {
             ncpu: ncpu,
             swapUsedMB: swapUsed,
             swapTotalMB: swapTotal,
+            compressorUsedMB: compressorMB,
+            physicalMemoryMB: physicalMB,
+            compressionRate: compressionRate,
             timestamp: Date(timeIntervalSince1970: 0)
         )
     }

@@ -48,11 +48,18 @@ struct EmergencySettingsView: View {
                         .monospacedDigit()
                 }
 
-                LabeledContent("Swap") {
-                    Text(String(format: "%.1f / %.1f GB",
-                                snapshot.swapUsedMB / 1024,
-                                snapshot.swapTotalMB / 1024))
+                LabeledContent("Compressed") {
+                    Text(compressedText(snapshot: snapshot))
                         .monospacedDigit()
+                }
+
+                if snapshot.swapTotalMB > 0 {
+                    LabeledContent("Swap") {
+                        Text(String(format: "%.1f / %.1f GB",
+                                    snapshot.swapUsedMB / 1024,
+                                    snapshot.swapTotalMB / 1024))
+                            .monospacedDigit()
+                    }
                 }
             } else {
                 Text("Warte auf ersten Pressure-Snapshot …")
@@ -76,6 +83,20 @@ struct EmergencySettingsView: View {
         case .elevated: return "warn"
         case .critical: return "critical"
         }
+    }
+
+    /// "X MB" / "Y.Z GB" of compressed pages, plus the total RAM for context
+    /// so the reader can form a mental fraction without doing the math.
+    private func compressedText(snapshot: SystemPressureSnapshot) -> String {
+        let mb = snapshot.compressorUsedMB
+        let fracPct = snapshot.compressorFraction * 100
+        let rateSuffix = snapshot.compressionRate >= 100
+            ? String(format: "  ↑ %.0f/s", snapshot.compressionRate)
+            : ""
+        if mb >= 1024 {
+            return String(format: "%.1f GB (%.0f%%)%@", mb / 1024, fracPct, rateSuffix)
+        }
+        return String(format: "%.0f MB (%.0f%%)%@", mb, fracPct, rateSuffix)
     }
 }
 

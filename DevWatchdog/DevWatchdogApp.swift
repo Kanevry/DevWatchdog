@@ -38,7 +38,7 @@ struct DevWatchdogApp: App {
                 panicAction: panicAction,
                 openSettings: openSettings
             )
-                .task {
+                .task { @MainActor in
                     guard !hasStarted else { return }
                     hasStarted = true
 
@@ -76,9 +76,29 @@ struct DevWatchdogApp: App {
                     }
                 }
         } label: {
-            menuBarLabel
+            // Workaround for FB11857447 / FB12094112 (open through macOS 15.x
+            // and macOS 26 beta as of April 2026): SwiftUI caches the label
+            // snapshot until the menu bar item is hit-tested (hover/click), so
+            // @Published changes from `processMonitor` don't propagate until the
+            // user interacts. Wrapping in `TimelineView(.periodic)` forces the
+            // subtree to re-evaluate on a low-frequency cadence, pulling fresh
+            // values from the ObservableObject on each tick.
+            //
+            // Cadence: 1 s normally, 4 s on Low Power Mode. Higher rates burn
+            // energy for no visible benefit (the label only shows counts and
+            // state, not per-second numeric changes).
+            TimelineView(.periodic(from: .now, by: labelRefreshInterval)) { _ in
+                menuBarLabel
+            }
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// Low-Power Mode stretches refresh to 4 s; normal runs at 1 Hz.
+    /// `TimelineView` re-reads this on each tick, so a toggle of LPM mid-session
+    /// takes at most one interval to apply.
+    private var labelRefreshInterval: TimeInterval {
+        ProcessInfo.processInfo.isLowPowerModeEnabled ? 4.0 : 1.0
     }
 
     private var menuBarLabel: some View {
@@ -119,14 +139,14 @@ struct DevWatchdogApp: App {
     }
 
     /// Short numeric indicator shown next to the emergency bolt icon.
-    /// Prefers the more severe of load factor and swap usage.
+    /// Prefers the more severe of load factor and memory-pressure fraction
+    /// (compressor on Apple Silicon, swap on Intel — whichever dominates).
     private func emergencyIndicator(for snapshot: SystemPressureSnapshot?) -> String? {
         guard let snapshot else { return nil }
         let load = snapshot.loadFactor
-        let swap = snapshot.swapUsageFraction
-        // If swap is near-full, surface that — it's often the more alarming signal.
-        if swap >= 0.8 {
-            return String(format: "%.0f%%", swap * 100)
+        let memFrac = snapshot.memoryUsageFraction
+        if memFrac >= 0.8 {
+            return String(format: "%.0f%%", memFrac * 100)
         }
         if load > 0 {
             return String(format: "%.1f×", load)

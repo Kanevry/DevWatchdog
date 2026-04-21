@@ -401,10 +401,11 @@ struct SettingsView: View {
                 .font(.title)
                 .fontWeight(.bold)
 
-            Text("v2.0.0")
+            Text(versionString)
                 .foregroundStyle(.secondary)
+                .monospacedDigit()
 
-            Text("Automatic cleanup of zombie Node.js processes on macOS.")
+            Text("Automatic cleanup of zombie dev processes on macOS.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
@@ -423,6 +424,15 @@ struct SettingsView: View {
     }
 
     // MARK: - Helpers
+
+    /// Marketing + build version read live from Info.plist (populated from
+    /// `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` build settings at build time).
+    private var versionString: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let marketing = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "v\(marketing) (build \(build))"
+    }
 
     /// Load app icon directly from bundle (NSApp.applicationIconImage doesn't work for LSUIElement apps)
     private var appIcon: Image {

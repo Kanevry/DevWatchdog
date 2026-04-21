@@ -180,6 +180,9 @@ final class EmergencyStateTests: XCTestCase {
             ncpu: ncpu,
             swapUsedMB: 0,
             swapTotalMB: 1024,
+            compressorUsedMB: 0,
+            physicalMemoryMB: 8192,
+            compressionRate: 0,
             timestamp: Date(timeIntervalSince1970: 0)
         )
     }
