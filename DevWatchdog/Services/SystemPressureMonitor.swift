@@ -144,15 +144,49 @@ final class SystemPressureMonitor: ObservableObject, SystemPressureSource {
         guard !isStarted else { return }
         isStarted = true
 
+        // Build fully non-isolated @Sendable handlers via nonisolated helpers.
+        // Rationale: `setEventHandler`'s closure is `@Sendable` and runs on a
+        // non-main queue. If the closure is formed inside this `@MainActor`
+        // function and captures `[weak self]`, Swift 6.1+ inserts a runtime
+        // executor check at closure entry (via `swift_task_isCurrentExecutor`),
+        // which calls `dispatch_assert_queue` and crashes the process the
+        // first time the handler fires on a background queue.
+        //
+        // Producing the closures from a `nonisolated static` factory side-steps
+        // the inference: the closures never inherit MainActor context and all
+        // MainActor hops happen explicitly inside `Task { @MainActor in ... }`.
+
         // 1. Memory pressure dispatch source.
         let source = DispatchSource.makeMemoryPressureSource(
             eventMask: [.normal, .warning, .critical],
             queue: .global(qos: .utility)
         )
-        source.setEventHandler { [weak self] in
-            // Capture raw mask in the dispatch context (non-isolated), then hop.
-            guard let sourceRef = self?.memoryPressureSource else { return }
-            let data = sourceRef.data
+        source.setEventHandler(handler: Self.makeMemoryPressureHandler(source: source, owner: self))
+        source.resume()
+        self.memoryPressureSource = source
+
+        // 2. Fallback poll timer for load + swap.
+        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
+        timer.schedule(deadline: .now(), repeating: Self.pollInterval, leeway: .milliseconds(250))
+        timer.setEventHandler(handler: Self.makePollHandler(owner: self))
+        timer.resume()
+        self.pollTimer = timer
+    }
+
+    // MARK: - Handler factories (nonisolated)
+
+    /// Build the memory-pressure event handler without capturing MainActor `self`
+    /// directly. The `source` is captured so we can read `.data` without hopping;
+    /// the MainActor hop happens explicitly via `Task { @MainActor in ... }`.
+    private nonisolated static func makeMemoryPressureHandler(
+        source: DispatchSourceMemoryPressure,
+        owner: SystemPressureMonitor
+    ) -> @Sendable () -> Void {
+        // Capture a weak reference outside the @MainActor function body so the
+        // returned closure is a plain nonisolated @Sendable — no inherited
+        // isolation, no runtime executor check.
+        return { [weak owner, source] in
+            let data = source.data
             let level: PressureLevel
             if data.contains(.critical) {
                 level = .critical
@@ -161,26 +195,25 @@ final class SystemPressureMonitor: ObservableObject, SystemPressureSource {
             } else {
                 level = .normal
             }
-            Task { @MainActor [weak self] in
-                self?.handleMemoryPressure(level)
+            Task { @MainActor [weak owner] in
+                owner?.handleMemoryPressure(level)
             }
         }
-        source.resume()
-        self.memoryPressureSource = source
+    }
 
-        // 2. Fallback poll timer for load + swap.
-        let timer = DispatchSource.makeTimerSource(queue: pollQueue)
-        timer.schedule(deadline: .now(), repeating: Self.pollInterval, leeway: .milliseconds(250))
-        timer.setEventHandler { [weak self] in
+    /// Build the poll timer's event handler. The handler reads sysctl values
+    /// (all `nonisolated`) and hops back to MainActor via a `Task`.
+    private nonisolated static func makePollHandler(
+        owner: SystemPressureMonitor
+    ) -> @Sendable () -> Void {
+        return { [weak owner] in
             let load = SysctlReader.loadAverage1m()
             let swap = SysctlReader.swapUsage()
             let ncpu = SysctlReader.ncpu()
-            Task { @MainActor [weak self] in
-                self?.handlePoll(loadAverage1m: load, swap: swap, ncpu: ncpu)
+            Task { @MainActor [weak owner] in
+                owner?.handlePoll(loadAverage1m: load, swap: swap, ncpu: ncpu)
             }
         }
-        timer.resume()
-        self.pollTimer = timer
     }
 
     func stop() {

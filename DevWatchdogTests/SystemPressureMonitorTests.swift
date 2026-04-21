@@ -130,6 +130,43 @@ final class SystemPressureMonitorTests: XCTestCase {
         }
     }
 
+    // MARK: - Live dispatch source wiring (regression)
+
+    /// Regression test for the 2026-04-21 startup crash: under Swift 6 strict
+    /// concurrency, `DispatchSource` event handlers formed inside a `@MainActor`
+    /// function that capture `[weak self]` (a MainActor-isolated class) inherit
+    /// an implicit executor check at closure entry. When the 5s fallback poll
+    /// timer fired on `at.kanevry.DevWatchdog.SystemPressureMonitor`, the check
+    /// called `dispatch_assert_queue` and crashed with `EXC_BREAKPOINT` / "BUG
+    /// IN CLIENT OF LIBDISPATCH: Block was expected to execute on queue …".
+    ///
+    /// The fix produces the handlers from `nonisolated static` factories so
+    /// they never inherit MainActor context. This test exercises the real
+    /// `start()` path and waits for the first poll-timer fire (deadline `.now()`
+    /// → fires within milliseconds) — if the regression comes back, this test
+    /// will abort the process.
+    @MainActor
+    func testStartDoesNotCrashWhenPollTimerFires() async throws {
+        let monitor = SystemPressureMonitor()
+
+        // Subscribe BEFORE start() so we catch the first emit from the poll tick.
+        let exp = expectation(description: "poll handler delivered a snapshot")
+        exp.assertForOverFulfill = false
+        let cancellable = monitor.snapshotPublisher
+            .dropFirst() // skip the seeded initial value
+            .sink { _ in exp.fulfill() }
+
+        await monitor.start()
+
+        // The poll timer is scheduled with `deadline: .now()`, so the first fire
+        // happens on `pollQueue` essentially immediately. If the isolation-crash
+        // regresses, the process aborts before this wait returns.
+        await fulfillment(of: [exp], timeout: 10.0)
+
+        cancellable.cancel()
+        await monitor.stop()
+    }
+
     // MARK: - FakeSystemPressureSource wiring
 
     @MainActor
