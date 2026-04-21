@@ -126,6 +126,27 @@ struct EmergencySettingsViewNoLive: View {
 private struct EmergencyModeSections: View {
     @ObservedObject var config: WatchdogConfig
 
+    /// Hint row for the emergency load-factor slider. Scales the
+    /// recommendation by core count because Apple Silicon efficiency cores
+    /// have been part of `ncpu` for years now — a blanket 2× on an M3 Max is
+    /// effectively "never trigger".
+    private var loadFactorHint: some View {
+        let current = config.emergencyLoadFactor
+        let recommended = SettingsRecommendations.emergencyLoadFactor
+        let cores = SettingsRecommendations.logicalCoreCount
+        let onRecommended = abs(current - recommended) < 0.05
+        let onDefault = abs(current - 2.0) < 0.05
+        return HStack(spacing: 8) {
+            Text("Standard: 2.0×")
+                .foregroundColor(onDefault ? .accentColor : .secondary)
+            Text("·")
+                .foregroundColor(.secondary)
+            Text(String(format: "Empfohlen: %.1f× (für %d Kerne)", recommended, cores))
+                .foregroundColor(onRecommended ? .accentColor : .secondary)
+        }
+        .font(.caption2)
+    }
+
     var body: some View {
         Section("Emergency Mode") {
             Toggle("Emergency Mode aktiviert", isOn: $config.emergencyModeEnabled)
@@ -149,6 +170,8 @@ private struct EmergencyModeSections: View {
             Text("Multiplikator relativ zu Anzahl CPU-Kerne — überschritten → Emergency-Zustand.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            loadFactorHint
+                .disabled(!config.emergencyModeEnabled)
 
             LabeledContent("Load-Faktor für Elevated") {
                 HStack {

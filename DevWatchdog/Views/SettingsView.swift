@@ -81,7 +81,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Timing") {
+            Section {
                 LabeledContent("Scan-Intervall") {
                     HStack {
                         Slider(value: $config.scanInterval, in: 10...120, step: 5)
@@ -91,6 +91,13 @@ struct SettingsView: View {
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
+                settingsHint(
+                    current: config.scanInterval,
+                    defaultValue: 30,
+                    recommended: SettingsRecommendations.scanInterval,
+                    format: { "\(Int($0))s" },
+                    recommendationReason: scanIntervalReason
+                )
 
                 LabeledContent("Orphan-Timeout") {
                     HStack {
@@ -104,6 +111,13 @@ struct SettingsView: View {
                 Text("Wie lange ein verwaister Prozess leben darf, bevor er als Zombie markiert wird.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                settingsHint(
+                    current: config.orphanTimeout,
+                    defaultValue: 120,
+                    recommended: SettingsRecommendations.orphanTimeout,
+                    format: formatDuration,
+                    recommendationReason: nil
+                )
 
                 LabeledContent("Grace-Period") {
                     HStack {
@@ -117,6 +131,13 @@ struct SettingsView: View {
                 Text("Warnzeit, bevor ein Zombie beendet wird. Du kannst in dieser Zeit noch eingreifen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                settingsHint(
+                    current: config.gracePeriod,
+                    defaultValue: 30,
+                    recommended: SettingsRecommendations.gracePeriod,
+                    format: { "\(Int($0))s" },
+                    recommendationReason: nil
+                )
 
                 LabeledContent("Catch-all Kill") {
                     HStack {
@@ -130,6 +151,27 @@ struct SettingsView: View {
                 Text("Jeder Dev-Prozess ohne spezifische Regel, der länger läuft, wird beendet. Sicherheitsnetz.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                settingsHint(
+                    current: config.catchAllMaxRuntime,
+                    defaultValue: 28_800,
+                    recommended: SettingsRecommendations.catchAllMaxRuntime,
+                    format: formatDuration,
+                    recommendationReason: catchAllReason
+                )
+            } header: {
+                HStack {
+                    Text("Timing")
+                    Spacer()
+                    Button("Timing zurücksetzen") {
+                        config.scanInterval = 30
+                        config.orphanTimeout = 120
+                        config.gracePeriod = 30
+                        config.catchAllMaxRuntime = 28_800
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                }
             }
 
             Section("Benachrichtigungen") {
@@ -421,6 +463,52 @@ struct SettingsView: View {
             Spacer()
         }
         .padding()
+    }
+
+    // MARK: - Settings hint (Default / Recommended)
+
+    /// One-line sub-label below a slider that shows the ship-default and the
+    /// hardware-tuned recommendation. Goes blue when the user's current value
+    /// equals the recommendation (reassurance), stays neutral otherwise —
+    /// does not nag the user about "wrong" settings, just shows the options.
+    @ViewBuilder
+    private func settingsHint(
+        current: Double,
+        defaultValue: Double,
+        recommended: Double,
+        format: (Double) -> String,
+        recommendationReason: String?
+    ) -> some View {
+        let onRecommended = abs(current - recommended) < 0.5
+        let onDefault = abs(current - defaultValue) < 0.5
+        let recSuffix = recommendationReason.map { " (\($0))" } ?? ""
+
+        HStack(spacing: 8) {
+            Text("Standard: \(format(defaultValue))")
+                .foregroundColor(onDefault ? .accentColor : .secondary)
+            Text("·")
+                .foregroundColor(.secondary)
+            Text("Empfohlen: \(format(recommended))\(recSuffix)")
+                .foregroundColor(onRecommended ? .accentColor : .secondary)
+        }
+        .font(.caption2)
+    }
+
+    /// Dynamic reason string for the scan-interval recommendation, so the
+    /// user sees *why* we suggest what we suggest ("für 32 GB RAM").
+    private var scanIntervalReason: String {
+        let ram = SettingsRecommendations.physicalRAMGB
+        if ram < 8 { return "bei <8 GB RAM" }
+        if ram >= 16 { return String(format: "bei %.0f GB RAM", ram) }
+        return "bei 8–16 GB RAM"
+    }
+
+    /// Dynamic reason string for the catch-all recommendation.
+    private var catchAllReason: String {
+        let ram = SettingsRecommendations.physicalRAMGB
+        if ram < 16 { return "kleinere Maschine" }
+        if ram > 32 { return "Workstation-Klasse" }
+        return "Standard-Dev-Maschine"
     }
 
     // MARK: - Helpers
