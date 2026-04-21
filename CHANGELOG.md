@@ -6,6 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Popover bleibt offen, Buttons reagieren nicht** (Regression seit v3.2.0,
+  `NSStatusItem`-Umbau). LSUIElement-App braucht explizites
+  `NSApp.activate(ignoringOtherApps: true)` bevor das Popover gezeigt wird —
+  sonst kann das Popover-Window nicht key werden, SwiftUI-Buttons (Beenden,
+  Einstellungen, Protokoll, Kill-CTAs) feuern nicht, und `.transient`-Dismissal
+  bleibt aus. Zusätzlich verhinderte `NSHostingView` über dem Status-Button
+  durch eigenes Hit-Testing das Toggle-Verhalten; Label-Host ist jetzt eine
+  `PassthroughHostingView`, die Klicks an den darunter liegenden `NSButton`
+  durchreicht. Closes GitLab #38.
+- **ActionBar ohne Inhalt bei einem einzelnen aktiven Suspect** — 16 px leeres
+  Padding + Divider, wenn genau ein aktiver Suspect ohne Zombies/Idle vorlag,
+  weil die CTA-Logik nur bei `count > 1` einen Button rendert. Gate prüft jetzt
+  via `hasActionBarContent` die tatsächlichen CTA-Conditions. Closes #39.
+- **Header-Pill abgeschnitten bei hohen CPU-Werten** — Popover-Breite
+  380 → 400 px, Pill + Timestamp-VStack hat `minWidth: 90`. Closes #40.
+- **Swap-Zeile zeigte Compression-Rate** — die `↑ x/s`-Rate ist ausschließlich
+  Compression-Rate; wird jetzt nur im "Compressed"-Modus gerendert, nicht wenn
+  die Zeile auf "Swap" flippt. Closes #41.
+
+### Changed
+
+- **Pause/Fortsetzen jetzt auch für gruppierte Prozesse** — `ProcessGroupRowView`
+  reicht `onThrottle`/`onResume` an expandierte Kind-Rows durch. Im `bun (4)`-
+  Menü stehen damit Pausieren und Fortsetzen zur Verfügung. Closes #42.
+- **Panic-Button visuell sekundär** — im Header nur noch Bolt-Icon; ab 10+
+  Targets erscheint der Count als kleines Badge daneben. Tooltip enthält den
+  aktuellen Count. Hotkey `⌘⇧⌥P` unverändert. Closes #43.
+- **Empty-State kontextsensitiv** — Copy unterscheidet jetzt zwischen `normal`
+  ("Alles sauber"), `elevated` ("Vorerst sauber") und `emergency` ("Keine
+  Targets mehr · System-Druck noch hoch, Scanner greift sofort zu"). Behebt den
+  visuellen Widerspruch zwischen pulsierendem Emergency-Banner und grünem
+  "Alles sauber"-Check. Closes #44.
+- **Footer: "Log" → "Protokoll"** — einheitlich deutsch. SessionLogView-Titel
+  entsprechend angepasst ("Session-Protokoll"). Closes #45.
+- **CPU-Farbskala skaliert jetzt mit `ncpu`** — 100 % CPU auf einer 12-Kern-
+  Maschine ist keine Warnfarbe mehr wert; rot ab ≥ 15 % Gesamt-Kapazität,
+  orange ab ≥ 5 %. Gilt für Einzel- und Gruppenzeilen. Closes #46.
+
 ### Added
 
 - **libproc-based process enumerator (opt-in, feature-flagged)** — new
