@@ -8,6 +8,11 @@ protocol ProcessTerminator: Sendable {
     /// Politely terminate (SIGTERM with a follow-up SIGKILL if still alive).
     func terminate(pid: Int32) -> KillResult
 
+    /// Politely terminate with PID-reuse identity verification.
+    /// `expectedStart` is the proc_pidinfo start timestamp; 0 means "skip verification".
+    /// `expectedComm` is the short process name (up to 15 chars); nil means "skip comm check".
+    func terminate(pid: Int32, expectedStart: Int64, expectedComm: String?) -> KillResult
+
     /// Immediate, non-graceful kill (SIGKILL).
     func forceKill(pid: Int32)
 
@@ -22,11 +27,26 @@ protocol ProcessTerminator: Sendable {
     func resume(pid: Int32) -> KillResult
 }
 
+// MARK: - Default implementation for backward compatibility
+
+extension ProcessTerminator {
+    /// Default: no identity verification — delegates to the original `terminate(pid:)`.
+    /// Test doubles that only implement the original method get this for free.
+    func terminate(pid: Int32, expectedStart: Int64, expectedComm: String?) -> KillResult {
+        terminate(pid: pid)
+    }
+}
+
 // MARK: - ProcessKiller adoption
 
 extension ProcessKiller: ProcessTerminator {
     /// Protocol alias that forwards to the existing ``kill(pid:)`` implementation.
     func terminate(pid: Int32) -> KillResult {
         kill(pid: pid)
+    }
+
+    /// Identity-verified termination — delegates to ``kill(pid:expectedStart:expectedComm:)``.
+    func terminate(pid: Int32, expectedStart: Int64, expectedComm: String?) -> KillResult {
+        kill(pid: pid, expectedStart: expectedStart, expectedComm: expectedComm)
     }
 }

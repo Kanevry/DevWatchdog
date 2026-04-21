@@ -12,6 +12,8 @@ class ProcessMonitor: ObservableObject {
     @Published var totalMemoryMB: Double = 0
     @Published var isScanning = false
     @Published var lastError: String?
+    /// Set to true when ps has failed 3 or more consecutive times. Cleared on next success.
+    @Published var psFailureSpike: Bool = false
     /// Latest system-pressure snapshot republished from the injected source.
     /// `nil` until the source emits its first value.
     @Published var pressure: SystemPressureSnapshot?
@@ -145,9 +147,11 @@ class ProcessMonitor: ObservableObject {
 
         let excludedApps = config?.excludedApps ?? WatchdogConfig.defaultExcludedApps
         let inclusionPatterns = config?.inclusionPatterns ?? WatchdogConfig.defaultInclusionPatterns
+        let psTimeout = config?.psTimeoutSeconds ?? 10
         let processes = await Task.detached {
-            PSParser.parseProcessList(excludedApps: excludedApps, inclusionPatterns: inclusionPatterns)
+            PSParser.parseProcessList(excludedApps: excludedApps, inclusionPatterns: inclusionPatterns, timeout: psTimeout)
         }.value
+        self.psFailureSpike = PSFailureCounter.shared.failureSpike
 
         guard let config else { return }
 
@@ -201,7 +205,14 @@ class ProcessMonitor: ObservableObject {
         // (by CPU·RSS score) to zombies. Point of emergency mode is to be
         // aggressive — normally-protected warn-bucket processes get killed.
         if emergencyState == .emergency && !suspects.isEmpty {
-            let promoted = suspects
+            let minAge = config.emergencyMinAgeSeconds
+            let ageFilteredSuspects = suspects.filter { p in
+                // Only promote processes older than minAge.
+                // If runtime is unknown (no startTime and no startTimestamp), treat as old.
+                guard let rt = p.runtime else { return true }
+                return rt >= minAge
+            }
+            let promoted = ageFilteredSuspects
                 .sorted { emergencyScore($0) > emergencyScore($1) }
                 .prefix(3)
             let promotedIDs = Set(promoted.map(\.id))
@@ -238,7 +249,11 @@ class ProcessMonitor: ObservableObject {
     }
 
     func killProcess(_ process: DevProcess) {
-        let result = terminator.terminate(pid: process.pid)
+        let result = terminator.terminate(
+            pid: process.pid,
+            expectedStart: process.startTimestamp ?? 0,
+            expectedComm: process.processName
+        )
         switch result {
         case .success, .alreadyDead:
             zombieProcesses.removeAll { $0.id == process.id }
@@ -440,7 +455,11 @@ class ProcessMonitor: ObservableObject {
         let count = zombieProcesses.count
 
         for process in zombieProcesses {
-            _ = terminator.terminate(pid: process.pid)
+            _ = terminator.terminate(
+                pid: process.pid,
+                expectedStart: process.startTimestamp ?? 0,
+                expectedComm: process.processName
+            )
             let reason = config.map { inferKillReason(for: process, config: $0) }
             sessionLog.log(
                 .kill,
@@ -476,7 +495,11 @@ class ProcessMonitor: ObservableObject {
         let count = suspectProcesses.count
 
         for process in suspectProcesses {
-            _ = terminator.terminate(pid: process.pid)
+            _ = terminator.terminate(
+                pid: process.pid,
+                expectedStart: process.startTimestamp ?? 0,
+                expectedComm: process.processName
+            )
             let reason = config.map { inferKillReason(for: process, config: $0, allowEmergencyPromotion: true) }
             sessionLog.log(
                 .kill,
@@ -772,7 +795,11 @@ class ProcessMonitor: ObservableObject {
                 // Evaluate against the *current* effective grace, not the one
                 // snapshotted at first-seen time.
                 if now.timeIntervalSince(entry.firstSeen) >= graceNow {
-                    _ = terminator.terminate(pid: zombie.pid)
+                    _ = terminator.terminate(
+                        pid: zombie.pid,
+                        expectedStart: zombie.startTimestamp ?? 0,
+                        expectedComm: zombie.processName
+                    )
                     pendingKills.removeValue(forKey: zombie.pid)
                     notifiedZombiePIDs.remove(zombie.pid)
                     killedCount += 1
@@ -822,6 +849,44 @@ class ProcessMonitor: ObservableObject {
     }
 }
 
+// MARK: - PS Error Tracking
+
+enum PSError: String, Sendable {
+    case psSpawnFailed
+    case psTimeout
+    case psEmptyOutput
+    case psParseFailed
+}
+
+/// Tracks consecutive ps failures and signals a spike after 3 in a row.
+/// Thread-safe via NSLock.
+final class PSFailureCounter: @unchecked Sendable {
+    static let shared = PSFailureCounter()
+    private let lock = NSLock()
+    private var consecutiveFailures = 0
+    private var _failureSpike = false
+
+    var failureSpike: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _failureSpike
+    }
+
+    func recordSuccess() {
+        lock.lock()
+        consecutiveFailures = 0
+        _failureSpike = false
+        lock.unlock()
+    }
+
+    func recordFailure() {
+        lock.lock()
+        consecutiveFailures += 1
+        if consecutiveFailures >= 3 { _failureSpike = true }
+        lock.unlock()
+    }
+}
+
 // MARK: - Process List Parser (nonisolated for background execution)
 
 enum PSParser: Sendable {
@@ -837,17 +902,15 @@ enum PSParser: Sendable {
         let startTime: Date?
     }
 
-    static func parseProcessList(excludedApps: [String], inclusionPatterns: [String] = []) -> [DevProcess] {
-        let pipe = Pipe()
-        let process = Process()
-
-        // Check if ps command exists before running
+    static func parseProcessList(excludedApps: [String], inclusionPatterns: [String] = [], timeout: TimeInterval = 10) -> [DevProcess] {
         let psURL = URL(fileURLWithPath: "/bin/ps")
         guard FileManager.default.fileExists(atPath: psURL.path) else {
             DWLogger.shared.log("ps command not found at /bin/ps", category: .monitor, level: .error)
             return []
         }
 
+        let process = Process()
+        let pipe = Pipe()
         process.executableURL = psURL
         process.arguments = ["-eo", "user=,pid=,ppid=,%cpu=,%mem=,rss=,state=,start=,args="]
         process.standardOutput = pipe
@@ -856,14 +919,39 @@ enum PSParser: Sendable {
         do {
             try process.run()
         } catch {
-            DWLogger.shared.log("Failed to run ps command: \(error.localizedDescription)", category: .monitor, level: .error)
+            DWLogger.shared.log("PSError=\(PSError.psSpawnFailed.rawValue) \(error.localizedDescription)", category: .monitor, level: .error)
             return []
         }
 
+        // Watchdog: if process outlives `timeout`, terminate via SIGTERM then SIGKILL.
+        let watchdog = DispatchWorkItem { [weak process] in
+            guard let process, process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) { [weak process] in
+                guard let process, process.isRunning else { return }
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        watchdog.cancel()
 
-        guard let output = String(data: data, encoding: .utf8) else { return [] }
+        // Detect timeout by checking termination reason / exit status
+        if process.terminationReason == .uncaughtSignal || process.terminationStatus != 0 {
+            DWLogger.shared.log("PSError=\(PSError.psTimeout.rawValue) ps exited abnormally (status=\(process.terminationStatus))", category: .monitor, level: .error)
+            PSFailureCounter.shared.recordFailure()
+            return []
+        }
+
+        guard let output = String(data: data, encoding: .utf8), !output.isEmpty else {
+            DWLogger.shared.log("PSError=\(PSError.psEmptyOutput.rawValue) ps produced no output", category: .monitor, level: .error)
+            PSFailureCounter.shared.recordFailure()
+            return []
+        }
+
+        PSFailureCounter.shared.recordSuccess()
 
         let lines = output.components(separatedBy: "\n")
         guard !lines.isEmpty else { return [] }
@@ -909,6 +997,9 @@ enum PSParser: Sendable {
             let parentPID = parsed.ppid
             let isOrphan = parentPID == 1
 
+            // Attempt precise start-time lookup via proc_pidinfo (thread-safe).
+            let procInfo = ProcPIDInfo.lookup(pid: parsed.pid)
+
             let devProcess = DevProcess(
                 id: parsed.pid,
                 user: parsed.user,
@@ -919,7 +1010,8 @@ enum PSParser: Sendable {
                 startTime: parsed.startTime,
                 parentPID: parentPID,
                 isOrphan: isOrphan,
-                state: ProcessState(psStateString: parsed.state)
+                state: ProcessState(psStateString: parsed.state),
+                startTimestamp: procInfo?.startTvSec
             )
             results.append(devProcess)
         }

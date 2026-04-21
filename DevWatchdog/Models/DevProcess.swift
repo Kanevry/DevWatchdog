@@ -34,6 +34,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     let rss: Int // KB
     let command: String
     let startTime: Date?
+    /// Unix-second timestamp from proc_pidinfo (nil = unavailable at capture).
+    /// Preferred over `startTime` for runtime calculation when available.
+    let startTimestamp: Int64?
     let parentPID: Int32
     let isOrphan: Bool
     let state: ProcessState
@@ -48,7 +51,8 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         startTime: Date?,
         parentPID: Int32,
         isOrphan: Bool,
-        state: ProcessState = .unknown
+        state: ProcessState = .unknown,
+        startTimestamp: Int64? = nil
     ) {
         self.id = id
         self.user = user
@@ -60,11 +64,16 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         self.parentPID = parentPID
         self.isOrphan = isOrphan
         self.state = state
+        self.startTimestamp = startTimestamp
     }
 
     var pid: Int32 { id }
 
     var runtime: TimeInterval? {
+        if let startTimestamp, startTimestamp > 0 {
+            let now = Int64(Date().timeIntervalSince1970)
+            return TimeInterval(max(0, now - startTimestamp))
+        }
         guard let start = startTime else { return nil }
         return Date().timeIntervalSince(start)
     }

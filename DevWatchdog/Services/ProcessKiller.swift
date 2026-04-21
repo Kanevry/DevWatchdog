@@ -29,6 +29,21 @@ final class ProcessKiller: Sendable {
         return .success
     }
 
+    /// Kill a process after verifying PID identity (prevents PID-reuse accidents).
+    /// When `expectedStart` is 0, identity check is skipped (equivalent to plain `kill`).
+    func kill(pid: Int32, expectedStart: Int64, expectedComm: String?) -> KillResult {
+        guard ProcPIDInfo.verifyIdentity(pid: pid, expectedStart: expectedStart, expectedComm: expectedComm) else {
+            DWLogger.shared.log(
+                "PID-reuse detected — aborted kill of \(pid) (expectedStart=\(expectedStart), comm=\(expectedComm ?? "?"))",
+                category: .killer,
+                level: .error,
+                pid: pid
+            )
+            return .failed(errno: EPERM)
+        }
+        return kill(pid: pid)
+    }
+
     /// Force kill immediately with SIGKILL (no grace period)
     func forceKill(pid: Int32) {
         Foundation.kill(pid, SIGKILL)

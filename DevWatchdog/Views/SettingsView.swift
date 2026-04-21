@@ -8,6 +8,7 @@ struct SettingsView: View {
     /// Wave 5 coordinator: pass the app's shared `ProcessMonitor` here to enable
     /// the live readout.
     var monitor: ProcessMonitor?
+    @StateObject private var insightsEngine: InsightsEngine
     @State private var newRulePattern = ""
     @State private var showingResetConfirmation = false
     @State private var newExcludedApp = ""
@@ -16,6 +17,8 @@ struct SettingsView: View {
     init(config: WatchdogConfig, monitor: ProcessMonitor? = nil) {
         self.config = config
         self.monitor = monitor
+        let log = monitor?.sessionLog ?? SessionLog()
+        _insightsEngine = StateObject(wrappedValue: InsightsEngine(log: log, config: config))
     }
 
     var body: some View {
@@ -35,12 +38,17 @@ struct SettingsView: View {
                     Label("Emergency", systemImage: "bolt.shield.fill")
                 }
 
+            InsightsView(engine: insightsEngine)
+                .tabItem {
+                    Label("Insights", systemImage: "lightbulb.fill")
+                }
+
             aboutTab
                 .tabItem {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(minWidth: 480, minHeight: 500)
+        .frame(minWidth: 520, minHeight: 500)
         .padding()
     }
 

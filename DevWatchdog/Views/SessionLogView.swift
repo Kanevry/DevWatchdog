@@ -68,7 +68,25 @@ struct SessionLogView: View {
 
     private var footer: some View {
         HStack {
+            Menu {
+                Button("Copy as JSON") {
+                    LogExporter.copyJSONToPasteboard(entries: log.entries)
+                }
+                Button("Save Log…") {
+                    Task { @MainActor in
+                        _ = await LogExporter.promptAndSaveJSON(entries: log.entries)
+                    }
+                }
+            } label: {
+                Label("Exportieren", systemImage: "square.and.arrow.up")
+                    .font(.callout)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(log.entries.isEmpty)
+
             Spacer()
+
             Button("Löschen", role: .destructive) {
                 log.clear()
             }

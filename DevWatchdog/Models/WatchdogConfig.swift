@@ -60,6 +60,14 @@ class WatchdogConfig: ObservableObject {
     @Published var softKillPreferred: Bool {
         didSet { defaults.set(softKillPreferred, forKey: "softKillPreferred") }
     }
+    /// Minimum process age (seconds) required before emergency promotion to zombie.
+    @Published var emergencyMinAgeSeconds: TimeInterval {
+        didSet { defaults.set(emergencyMinAgeSeconds, forKey: "emergencyMinAgeSeconds") }
+    }
+    /// Timeout (seconds) for the ps subprocess before it is killed and treated as a failure.
+    @Published var psTimeoutSeconds: TimeInterval {
+        didSet { defaults.set(psTimeoutSeconds, forKey: "psTimeoutSeconds") }
+    }
 
     static let defaultInclusionPatterns = [
         "node", "vitest", "jest", "tsc", "tsgo", "esbuild", "next", "webpack",
@@ -97,6 +105,8 @@ class WatchdogConfig: ObservableObject {
         self.softKillPreferred = d.object(forKey: "softKillPreferred") != nil
             ? d.bool(forKey: "softKillPreferred")
             : true
+        self.emergencyMinAgeSeconds = d.double(forKey: "emergencyMinAgeSeconds").nonZero ?? 60
+        self.psTimeoutSeconds = d.double(forKey: "psTimeoutSeconds").nonZero ?? 10
 
         // Load rules
         if let data = d.data(forKey: "processRules"),
@@ -149,6 +159,8 @@ class WatchdogConfig: ObservableObject {
         elevatedLoadFactor = 1.0
         emergencyCooldown = 30
         softKillPreferred = true
+        emergencyMinAgeSeconds = 60
+        psTimeoutSeconds = 10
     }
 
     private func saveExcludedApps() {
