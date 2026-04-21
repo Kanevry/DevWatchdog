@@ -3,6 +3,12 @@ import UserNotifications
 
 @main
 struct DevWatchdogApp: App {
+    /// Owns the status-bar `NSStatusItem`, popover, and termination-observer
+    /// lifecycle. Replaces the former `MenuBarExtra` scene — see ``AppDelegate``
+    /// for the rationale (FB11857447 stale-label bug + xctest IPC hang under
+    /// the `TimelineView(.periodic)` workaround).
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     // Shared SystemPressureMonitor instance — powers ProcessMonitor's `pressure`
     // publisher and is available to future Emergency-Mode views via environment.
     @StateObject private var pressureMonitor: SystemPressureMonitor
@@ -23,133 +29,64 @@ struct DevWatchdogApp: App {
         _processMonitor = StateObject(wrappedValue: monitor)
         _config = StateObject(wrappedValue: cfg)
         self.panicAction = PanicAction(monitor: monitor, config: cfg)
-    }
-    @State private var settingsWindow: NSWindow?
-    @State private var hasStarted = false
 
-    // Store observer token — nonisolated(unsafe) static because App is a struct
-    nonisolated(unsafe) private static var terminationObserver: NSObjectProtocol?
-
-    var body: some Scene {
-        MenuBarExtra {
-            MenuBarView(
-                monitor: processMonitor,
-                config: config,
-                panicAction: panicAction,
-                openSettings: openSettings
+        // Hand the same instances to the delegate so its
+        // `applicationDidFinishLaunching` can wire up the status bar + popover
+        // against the live monitors.
+        AppDelegate.prepare(AppDelegate.Bootstrap(
+            monitor: monitor,
+            config: cfg,
+            panicAction: panicAction,
+            panicHotkey: panicHotkey,
+            openSettings: DevWatchdogApp.makeOpenSettingsCallback(
+                config: cfg,
+                monitor: monitor
             )
-                .task { @MainActor in
-                    guard !hasStarted else { return }
-                    hasStarted = true
-
-                    DWLogger.shared.bootstrap(
-                        appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
-                        buildNumber: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0",
-                        osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-                        ncpu: ProcessInfo.processInfo.activeProcessorCount,
-                        configSnapshot: [
-                            "scanInterval": String(config.scanInterval),
-                            "emergencyMode": String(config.emergencyModeEnabled),
-                            "orphanTimeout": String(config.orphanTimeout),
-                            "gracePeriod": String(config.gracePeriod),
-                        ]
-                    )
-
-                    processMonitor.start(config: config)
-
-                    // Register the global panic hotkey (⌘⇧⌥P).
-                    let action = panicAction
-                    panicHotkey.register { @MainActor in
-                        action.execute()
-                    }
-
-                    let hotkey = panicHotkey
-                    Self.terminationObserver = NotificationCenter.default.addObserver(
-                        forName: NSApplication.willTerminateNotification,
-                        object: nil,
-                        queue: .main
-                    ) { [weak processMonitor] _ in
-                        MainActor.assumeIsolated {
-                            processMonitor?.stop()
-                            hotkey.unregister()
-                        }
-                    }
-                }
-        } label: {
-            menuBarLabel
-        }
-        .menuBarExtraStyle(.window)
+        ))
     }
 
-    private var menuBarLabel: some View {
-        let zombieCount = processMonitor.zombieProcesses.count
-        let suspectCount = processMonitor.suspectProcesses.count
-        let state = processMonitor.emergencyState
-        let pressure = processMonitor.pressure
+    /// An LSUIElement app still needs at least one `Scene` to satisfy the
+    /// `App` protocol. The `Settings` scene is never surfaced in the UI (no
+    /// Dock, no main menu, no `SettingsLink`) — it exists solely as scene
+    /// scaffolding. All real UI comes from the status item + popover owned
+    /// by ``AppDelegate``.
+    var body: some Scene {
+        Settings { EmptyView() }
+    }
 
-        return HStack(spacing: 2) {
-            switch state {
-            case .emergency:
-                PulsingEmergencyIcon(indicator: emergencyIndicator(for: pressure))
-                    .accessibilityLabel("DevWatchdog — Emergency Mode active")
-            case .elevated:
-                ElevatedMenubarIcon()
-                    .accessibilityLabel("DevWatchdog — Elevated system pressure")
-            case .normal:
-                if zombieCount > 0 {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .red)
-                    Text("\(zombieCount)")
-                        .monospacedDigit()
-                        .accessibilityLabel("DevWatchdog — \(zombieCount) zombie processes")
-                } else if suspectCount > 0 {
-                    Image(systemName: "eye.fill")
-                        .foregroundStyle(.orange)
-                    Text("\(suspectCount)")
-                        .monospacedDigit()
-                        .accessibilityLabel("DevWatchdog — \(suspectCount) suspect processes")
-                } else {
-                    Image(systemName: "checkmark.shield.fill")
-                        .foregroundStyle(.green)
-                        .accessibilityLabel("DevWatchdog — all clear")
-                }
+    /// Factory for the "open settings window" callback passed into the
+    /// popover. Returns a closure that manages a single reusable NSWindow —
+    /// the same behavior the app had under the old `MenuBarExtra` setup, so
+    /// clicking the gear button in the popover opens or surfaces the window
+    /// without spawning duplicates.
+    @MainActor
+    private static func makeOpenSettingsCallback(
+        config: WatchdogConfig,
+        monitor: ProcessMonitor
+    ) -> @MainActor () -> Void {
+        // `Box` keeps the NSWindow reference alive across closure invocations
+        // without using a static var (which would leak across app relaunches
+        // in tests and hot-reload scenarios).
+        final class Box: @unchecked Sendable {
+            var window: NSWindow?
+        }
+        let box = Box()
+        return { @MainActor in
+            if let window = box.window, window.isVisible {
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate()
+                return
             }
-        }
-    }
-
-    /// Short numeric indicator shown next to the emergency bolt icon.
-    /// Prefers the more severe of load factor and memory-pressure fraction
-    /// (compressor on Apple Silicon, swap on Intel — whichever dominates).
-    private func emergencyIndicator(for snapshot: SystemPressureSnapshot?) -> String? {
-        guard let snapshot else { return nil }
-        let load = snapshot.loadFactor
-        let memFrac = snapshot.memoryUsageFraction
-        if memFrac >= 0.8 {
-            return String(format: "%.0f%%", memFrac * 100)
-        }
-        if load > 0 {
-            return String(format: "%.1f×", load)
-        }
-        return nil
-    }
-
-    private func openSettings() {
-        if let window = settingsWindow, window.isVisible {
+            let view = SettingsView(config: config, monitor: monitor)
+            let hosting = NSHostingController(rootView: view)
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "DevWatchdog Settings"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 520, height: 600))
+            window.center()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate()
-            return
+            box.window = window
         }
-
-        let settingsView = SettingsView(config: config, monitor: processMonitor)
-        let hostingController = NSHostingController(rootView: settingsView)
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "DevWatchdog Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 520, height: 600))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        settingsWindow = window
     }
 }
