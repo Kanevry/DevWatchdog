@@ -4,6 +4,71 @@ All notable changes to DevWatchdog are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] — 2026-04-21
+
+Triage follow-up release. User-facing UX clarity (why-badges, smart kill split,
+hardware-aware recommendations), new infrastructure (disk-persisted session log
++ newly-orphaned detection), the Apple-Silicon-correct memory-pressure signal,
+and a migration off `MenuBarExtra` to `NSStatusItem` that finally makes the
+menu-bar icon refresh without hovering.
+
+### Added
+
+- **"Why?" signal badges** per suspect row — `NEW ORPHAN`, `ORPHAN`, `IDLE Nm`,
+  `ACTIVE N%`, `LEAK N MB`, `RULE …`, `KILL …`, `EXPIRED`, `PAUSED`. Each badge
+  is a short capsule with a German tooltip explaining the heuristic. Overall
+  `KillConfidence` (high/medium/low) colors the status dot and row background
+  so a crowded list draws the eye to real zombies first.
+- **Smart-split kill buttons** — when both idle (≈0 % CPU) and active (≥ 1 %
+  CPU) suspects exist, the popover renders two distinct buttons: "N inaktive
+  beenden" (green, safe) and "N aktive beenden" (red/orange, risky). Kills a
+  running test/build only when you explicitly say so.
+- **Hardware-aware settings recommendations** — each timing slider carries a
+  live "Standard: X · Empfohlen: Y (für Z GB RAM)" hint scaled from the host's
+  RAM / core count. Per-section reset button for Timing.
+- **Disk-persisted session log** — every log entry is now streamed to
+  `~/Library/Application Support/DevWatchdog/sessions/YYYY-MM-DD.jsonl`. The
+  log hydrates the last 24 h on launch; 14-day rotation keeps disk usage
+  bounded. Insights finally accrues value across restarts.
+- **Newly-orphaned detection** — `PPID` history is tracked across scans; a
+  `X → 1` transition is classified as `newlyOrphaned` (high confidence),
+  steady-state `PPID == 1` as `adoptedByLaunchd` (conservative, medium).
+- **Memory compressor signal** — `host_statistics64(HOST_VM_INFO64)` fills the
+  gap where `vm.swapusage` is always zero on Apple Silicon. `PressureDeriver`
+  now takes `max(swapFraction, compressorFraction)` so Emergency mode
+  triggers on the real memory signal.
+
+### Changed
+
+- **Menu-bar architecture**: replaced `MenuBarExtra` with an `NSStatusItem` +
+  `NSHostingView` setup owned by `AppDelegate`. Fixes FB11857447 — the system
+  menu-bar server now sees `@Published` updates immediately without requiring
+  a hover or click on the icon. Emergency-state pulse (`phaseAnimator`),
+  accessibility labels, and the panic hotkey (`⌘⇧⌥P`) are preserved.
+- **UI language unified to German** across every surface — previously a mix
+  of German (MenuBar / Emergency) and English (Settings / Rules / About).
+- **About window version** reads `CFBundleShortVersionString` at runtime
+  instead of a hardcoded string, so release builds always display correctly.
+
+### Fixed
+
+- Menu-bar icon no longer requires a hover to reflect fresh scan results
+  (FB11857447 / FB12094112). A prior attempt using `TimelineView(.periodic)`
+  broke `xcodebuild test` with a 5.5 min IPC hang and was reverted in favor
+  of the NSStatusItem migration above.
+- `Swap` readout on Apple Silicon showing permanent `0.0 / 0.0 GB` — replaced
+  with a Compressor-dominated `Speicher` row; `Swap` still surfaces only when
+  the host actually has non-zero swap usage.
+- About tab showing hard-coded `v2.0.0` regardless of the shipped build.
+- Various mixed DE/EN UI labels ("General" / "Rules" / "Warn:" / "Kill:")
+  that made the app look half-finished.
+
+### Open follow-ups
+
+See GitLab issues #34 (libproc migration), #35 (project detection via
+`PROC_PIDVNODEPATHINFO`), #36 (signal-based dev detection), #37 (proper
+i18n via `Localizable.xcstrings`). These are the next session's scope.
+
 ## [3.1.0] — 2026-04-21
 
 First signed release. Builds on v3.0 (Emergency Mode) with a full observability
