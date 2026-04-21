@@ -64,6 +64,13 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     /// "Why is this on the list" explainer — computed by
     /// ``ProcessSignalsAnalyzer`` during scan enrichment. Default: empty.
     let signals: ProcessSignals
+    /// Full current working directory path as read from proc_pidinfo(PROC_PIDVNODEPATHINFO).
+    /// Nil when unknown (PSParser legacy path, or libproc cwd lookup failed).
+    public let workingDirectory: String?
+    /// Project name resolved from `workingDirectory` via ProjectRootResolver.
+    /// Populated only when cwd is available AND a project marker was found. Preferred over
+    /// legacy `projectName` in UI/notification consumers (Wave 3 wires this up).
+    public let detectedProject: String?
 
     init(
         id: Int32,
@@ -78,7 +85,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         state: ProcessState = .unknown,
         startTimestamp: Int64? = nil,
         orphanConfidence: OrphanConfidence = .none,
-        signals: ProcessSignals = .empty
+        signals: ProcessSignals = .empty,
+        workingDirectory: String? = nil,
+        detectedProject: String? = nil
     ) {
         self.id = id
         self.user = user
@@ -93,6 +102,8 @@ struct DevProcess: Identifiable, Hashable, Sendable {
         self.startTimestamp = startTimestamp
         self.orphanConfidence = orphanConfidence
         self.signals = signals
+        self.workingDirectory = workingDirectory
+        self.detectedProject = detectedProject
     }
 
     /// Return a copy with `orphanConfidence` set. Used by ``ProcessMonitor``
@@ -107,7 +118,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
             state: state,
             startTimestamp: startTimestamp,
             orphanConfidence: confidence,
-            signals: signals
+            signals: signals,
+            workingDirectory: workingDirectory,
+            detectedProject: detectedProject
         )
     }
 
@@ -123,7 +136,9 @@ struct DevProcess: Identifiable, Hashable, Sendable {
             state: state,
             startTimestamp: startTimestamp,
             orphanConfidence: orphanConfidence,
-            signals: signals
+            signals: signals,
+            workingDirectory: workingDirectory,
+            detectedProject: detectedProject
         )
     }
 
@@ -253,6 +268,10 @@ struct DevProcess: Identifiable, Hashable, Sendable {
     }
 
     var projectName: String? {
+        if let detectedProject, !detectedProject.isEmpty {
+            return detectedProject
+        }
+        // Legacy fallback: path-marker matching on command string (for PSParser path)
         let markers = ["/Projects/", "/Developer/", "/repos/", "/src/", "/workspace/", "/Sites/"]
         for marker in markers {
             if let range = command.range(of: marker, options: .caseInsensitive) {

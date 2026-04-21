@@ -73,6 +73,21 @@ class WatchdogConfig: ObservableObject {
     @Published var useLibprocEnumerator: Bool {
         didSet { defaults.set(useLibprocEnumerator, forKey: "useLibprocEnumerator") }
     }
+    /// Feature flag: enable cwd-based project detection via proc_pidinfo(PROC_PIDVNODEPATHINFO)
+    /// in the libproc enumerator path. Requires `useLibprocEnumerator = true` to take effect
+    /// (PSParser path cannot cheaply provide cwd). Opt-in only (default false).
+    /// Addresses: GitLab #35 (G2).
+    @Published var useCwdProjectDetection: Bool {
+        didSet { defaults.set(useCwdProjectDetection, forKey: "useCwdProjectDetection") }
+    }
+    /// Feature flag: enable the signal-based dev-process classifier
+    /// (executable-path, cwd, parent-chain, bundle-ID heuristics) in place of the
+    /// wordlist-only inclusion filter. When the classifier returns .unknown, the
+    /// legacy wordlist filter still runs as a fallback. Opt-in only (default false).
+    /// Addresses: GitLab #36 (G1).
+    @Published var useSignalClassifier: Bool {
+        didSet { defaults.set(useSignalClassifier, forKey: "useSignalClassifier") }
+    }
 
     static let defaultInclusionPatterns = [
         "node", "vitest", "jest", "tsc", "tsgo", "esbuild", "next", "webpack",
@@ -113,6 +128,8 @@ class WatchdogConfig: ObservableObject {
         self.emergencyMinAgeSeconds = d.double(forKey: "emergencyMinAgeSeconds").nonZero ?? 60
         self.psTimeoutSeconds = d.double(forKey: "psTimeoutSeconds").nonZero ?? 10
         self.useLibprocEnumerator = d.object(forKey: "useLibprocEnumerator") as? Bool ?? false
+        self.useCwdProjectDetection = d.object(forKey: "useCwdProjectDetection") as? Bool ?? false
+        self.useSignalClassifier    = d.object(forKey: "useSignalClassifier")    as? Bool ?? false
 
         // Load rules
         if let data = d.data(forKey: "processRules"),
@@ -168,6 +185,8 @@ class WatchdogConfig: ObservableObject {
         emergencyMinAgeSeconds = 60
         psTimeoutSeconds = 10
         useLibprocEnumerator = false
+        useCwdProjectDetection = false
+        useSignalClassifier    = false
     }
 
     private func saveExcludedApps() {

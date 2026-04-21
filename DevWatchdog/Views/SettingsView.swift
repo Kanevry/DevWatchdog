@@ -253,6 +253,16 @@ struct SettingsView: View {
                 Text("Verwendet die native libproc-API statt /bin/ps-Subprozess. Schneller, aber noch in Erprobung. Wirkt ab nächstem Scan.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Experimentell — Signal-Klassifier", isOn: $config.useSignalClassifier)
+                Text("Signal-basierter Dev-Prozess-Filter (Pfad, cwd, Parent, Bundle-ID). Ersetzt Wortliste bei klaren Signalen; Wortliste bleibt Fallback für unklare Prozesse. Wirkt nur im libproc-Pfad.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Experimentell — cwd-Projekterkennung", isOn: $config.useCwdProjectDetection)
+                Text("Ermittelt Projektnamen via Arbeitsverzeichnis (proc_pidinfo). Behebt falsche Namen bei verschachtelten Repos. Erfordert libproc-Scanner.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section {

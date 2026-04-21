@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **cwd-basierte Projekterkennung (G2)** — hinter neuem Feature-Flag
+  `useCwdProjectDetection` (Default: aus). Liest das Arbeitsverzeichnis via
+  `proc_pidinfo(PROC_PIDVNODEPATHINFO)` und löst es über einen
+  Projekt-Root-Walker (`.git`, `package.json`, `Cargo.toml`, `go.mod`,
+  `pyproject.toml`, `Podfile`, `Package.swift`) zum korrekten Projektnamen auf
+  (leaf-wins für Monorepos). Behebt die Regressionsgrenze, dass
+  `~/Projects/Archiv/DevWatchdog/` den Marker `"Archiv"` statt `"DevWatchdog"`
+  liefert. Wirkt nur im libproc-Pfad. `DevProcess` hat neue Felder
+  `workingDirectory` und `detectedProject`; das bestehende `projectName`
+  bevorzugt `detectedProject`, wenn gesetzt. Closes GitLab #35.
+- **Signal-basierter Dev-Klassifier (G1)** — hinter neuem Feature-Flag
+  `useSignalClassifier` (Default: aus). Vier orthogonale Heuristiken
+  (Executable-Pfad, cwd, Parent-Prozess, Bundle-Identifier) ersetzen die
+  Wortlisten-Erstklassifikation. Harter Ausschluss für Nicht-Dev-Bundles
+  (z. B. `com.slack.`, `com.notion.`, Browser) wird von einer
+  Dev-Allowlist überschrieben (VSCode, Cursor, iTerm2, Terminal, Warp).
+  `.unknown`-Urteile fallen zur Wortliste zurück — existierende
+  `defaultInclusionPatterns` / `defaultExcludedApps` bleiben unverändert.
+  Wirkt nur im libproc-Pfad. Closes #36.
+- Zwei neue Settings-Toggles unter „Entwickler" für die oben genannten
+  Flags, im gleichen „Experimentell —" Muster wie der libproc-Scanner.
+- 46 neue Unit-/Integrationstests (`ProcPIDInfoCwdTests`,
+  `ProjectRootResolverTests`, `DevProcessClassifierTests`,
+  `LibProcSignalClassifierTests`). Test-Baseline 335 → 381.
+
 ### Fixed
 
 - **Popover bleibt offen, Buttons reagieren nicht** (Regression seit v3.2.0,

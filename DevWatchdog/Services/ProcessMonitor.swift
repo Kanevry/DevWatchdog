@@ -160,12 +160,17 @@ class ProcessMonitor: ObservableObject {
         let inclusionPatterns = config?.inclusionPatterns ?? WatchdogConfig.defaultInclusionPatterns
         let psTimeout = config?.psTimeoutSeconds ?? 10
         let useLibproc = config?.useLibprocEnumerator ?? false
+        // G2/G1 flags — only consumed by the libproc path; PSParser ignores them.
+        let useCwdProjectDetection = config?.useCwdProjectDetection ?? false
+        let useSignalClassifier = config?.useSignalClassifier ?? false
         let scanStart = Date()
         let rawProcesses = await Task.detached {
             if useLibproc {
                 return LibProcProcessEnumerator.parseProcessList(
                     excludedApps: excludedApps,
-                    inclusionPatterns: inclusionPatterns
+                    inclusionPatterns: inclusionPatterns,
+                    useCwdProjectDetection: useCwdProjectDetection,
+                    useSignalClassifier: useSignalClassifier
                 )
             } else {
                 return PSParser.parseProcessList(

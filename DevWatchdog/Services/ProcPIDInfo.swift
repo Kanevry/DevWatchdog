@@ -37,6 +37,27 @@ public enum ProcPIDInfo {
         return Info(startTvSec: startTvSec, comm: comm)
     }
 
+    /// Fetch the current working directory for a PID via proc_pidinfo(PROC_PIDVNODEPATHINFO).
+    /// Returns nil if the process is gone, permission is denied, or the PID is a kernel thread
+    /// with no cwd. Thread-safe: pure C call, no shared state.
+    public static func cwd(pid: Int32) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.stride)
+        let ret = withUnsafeMutablePointer(to: &info) { ptr -> Int32 in
+            proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, ptr, size)
+        }
+        guard ret == size else { return nil }
+
+        let path = withUnsafeBytes(of: info.pvi_cdir.vip_path) { rawBuf -> String in
+            let bytes = rawBuf.bindMemory(to: CChar.self)
+            if let termIdx = bytes.firstIndex(of: 0) {
+                return String(bytes: rawBuf[..<termIdx], encoding: .utf8) ?? ""
+            }
+            return String(bytes: rawBuf, encoding: .utf8) ?? ""
+        }
+        return path.isEmpty ? nil : path
+    }
+
     /// Check whether the live process at `pid` matches the expected (startTvSec, comm).
     /// Returns true when either: the lookup succeeds AND both fields match,
     /// or falls back to true if `expectedStart` is 0 (meaning: we never captured a start timestamp,
