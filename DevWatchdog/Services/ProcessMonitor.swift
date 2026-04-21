@@ -144,8 +144,9 @@ class ProcessMonitor: ObservableObject {
         defer { isScanning = false }
 
         let excludedApps = config?.excludedApps ?? WatchdogConfig.defaultExcludedApps
+        let inclusionPatterns = config?.inclusionPatterns ?? WatchdogConfig.defaultInclusionPatterns
         let processes = await Task.detached {
-            PSParser.parseProcessList(excludedApps: excludedApps)
+            PSParser.parseProcessList(excludedApps: excludedApps, inclusionPatterns: inclusionPatterns)
         }.value
 
         guard let config else { return }
@@ -249,7 +250,15 @@ class ProcessMonitor: ObservableObject {
                 .kill,
                 "Killed \(process.processName) (\(String(format: "%.0f", process.memoryMB)) MB)",
                 pid: process.pid,
-                processName: process.processName
+                processName: process.processName,
+                killReason: KillReason(
+                    ruleID: nil,
+                    rulePattern: nil,
+                    trigger: .manual,
+                    thresholdValue: 0,
+                    actualValue: process.runtime ?? 0,
+                    unit: "s"
+                )
             )
             if emergencyState == .emergency, result == .success {
                 emergencyKillCount += 1
@@ -432,11 +441,13 @@ class ProcessMonitor: ObservableObject {
 
         for process in zombieProcesses {
             _ = terminator.terminate(pid: process.pid)
+            let reason = config.map { inferKillReason(for: process, config: $0) }
             sessionLog.log(
                 .kill,
                 "Batch-killed \(process.processName)",
                 pid: process.pid,
-                processName: process.processName
+                processName: process.processName,
+                killReason: reason
             )
         }
         zombieProcesses.removeAll()
@@ -466,11 +477,13 @@ class ProcessMonitor: ObservableObject {
 
         for process in suspectProcesses {
             _ = terminator.terminate(pid: process.pid)
+            let reason = config.map { inferKillReason(for: process, config: $0, allowEmergencyPromotion: true) }
             sessionLog.log(
                 .kill,
                 "Batch-killed suspect \(process.processName)",
                 pid: process.pid,
-                processName: process.processName
+                processName: process.processName,
+                killReason: reason
             )
         }
         suspectProcesses.removeAll()
@@ -494,6 +507,99 @@ class ProcessMonitor: ObservableObject {
     }
 
     // MARK: - Private
+
+    /// Infer a ``KillReason`` for an auto-kill by replaying the same classification
+    /// logic used in ``scan()`` — rule match → specific exceeded threshold →
+    /// orphan-timeout → catch-all → emergency promotion.
+    ///
+    /// - Parameters:
+    ///   - process: The process being killed.
+    ///   - config: Active watchdog configuration.
+    ///   - allowEmergencyPromotion: Pass `true` when killing suspects that were
+    ///     promoted to zombie during an emergency scan (they may not satisfy normal
+    ///     hard-kill thresholds on their own).
+    private func inferKillReason(
+        for process: DevProcess,
+        config: WatchdogConfig,
+        allowEmergencyPromotion: Bool = false
+    ) -> KillReason {
+        // 1. Rule-based hard-kill: pick the first exceeded threshold (runtime > CPU > RSS)
+        if let rule = config.matchingRule(for: process), rule.shouldHardKill(process) {
+            let runtimeExceeded = rule.maxRuntime > 0 && (process.runtime ?? 0) >= rule.maxRuntime
+            let cpuExceeded = rule.maxCPUPercent > 0 && process.cpuPercent >= rule.maxCPUPercent
+            let rssExceeded = rule.maxRSSMB > 0 && process.memoryMB >= rule.maxRSSMB
+            if runtimeExceeded {
+                return KillReason(
+                    ruleID: rule.id,
+                    rulePattern: rule.pattern,
+                    trigger: .maxRuntime,
+                    thresholdValue: rule.maxRuntime,
+                    actualValue: process.runtime ?? 0,
+                    unit: "s"
+                )
+            } else if cpuExceeded {
+                return KillReason(
+                    ruleID: rule.id,
+                    rulePattern: rule.pattern,
+                    trigger: .maxCPUPercent,
+                    thresholdValue: rule.maxCPUPercent,
+                    actualValue: process.cpuPercent,
+                    unit: "%"
+                )
+            } else if rssExceeded {
+                return KillReason(
+                    ruleID: rule.id,
+                    rulePattern: rule.pattern,
+                    trigger: .maxRSSMB,
+                    thresholdValue: rule.maxRSSMB,
+                    actualValue: process.memoryMB,
+                    unit: "MB"
+                )
+            }
+        }
+        // 2. Orphan timeout
+        if process.isOrphan && (process.runtime ?? 0) >= config.orphanTimeout {
+            return KillReason(
+                ruleID: nil,
+                rulePattern: nil,
+                trigger: .orphanTimeout,
+                thresholdValue: config.orphanTimeout,
+                actualValue: process.runtime ?? 0,
+                unit: "s"
+            )
+        }
+        // 3. Catch-all max runtime
+        if config.catchAllMaxRuntime > 0 && (process.runtime ?? 0) >= config.catchAllMaxRuntime {
+            return KillReason(
+                ruleID: nil,
+                rulePattern: nil,
+                trigger: .catchAllMaxRuntime,
+                thresholdValue: config.catchAllMaxRuntime,
+                actualValue: process.runtime ?? 0,
+                unit: "s"
+            )
+        }
+        // 4. Emergency promotion (suspects raised to zombies during emergency triage)
+        if allowEmergencyPromotion || emergencyState == .emergency {
+            return KillReason(
+                ruleID: nil,
+                rulePattern: nil,
+                trigger: .emergencyPromotion,
+                thresholdValue: 0,
+                actualValue: emergencyScore(process),
+                unit: "%·MB"
+            )
+        }
+        // 5. Conservative fallback: report runtime against zero threshold
+        return KillReason(
+            ruleID: nil,
+            rulePattern: nil,
+            trigger: .catchAllMaxRuntime,
+            thresholdValue: 0,
+            actualValue: process.runtime ?? 0,
+            unit: "s"
+        )
+    }
 
     private func scheduleTimer() {
         timer?.invalidate()
@@ -675,7 +781,8 @@ class ProcessMonitor: ObservableObject {
                         .kill,
                         "Auto-killed zombie \(zombie.processName) (\(String(format: "%.0f", zombie.memoryMB)) MB)",
                         pid: zombie.pid,
-                        processName: zombie.processName
+                        processName: zombie.processName,
+                        killReason: inferKillReason(for: zombie, config: config)
                     )
                     if emergencyState == .emergency {
                         emergencyKillCount += 1
@@ -730,14 +837,14 @@ enum PSParser: Sendable {
         let startTime: Date?
     }
 
-    static func parseProcessList(excludedApps: [String]) -> [DevProcess] {
+    static func parseProcessList(excludedApps: [String], inclusionPatterns: [String] = []) -> [DevProcess] {
         let pipe = Pipe()
         let process = Process()
 
         // Check if ps command exists before running
         let psURL = URL(fileURLWithPath: "/bin/ps")
         guard FileManager.default.fileExists(atPath: psURL.path) else {
-            print("DevWatchdog: ps command not found at /bin/ps")
+            DWLogger.shared.log("ps command not found at /bin/ps", category: .monitor, level: .error)
             return []
         }
 
@@ -749,7 +856,7 @@ enum PSParser: Sendable {
         do {
             try process.run()
         } catch {
-            print("DevWatchdog: Failed to run ps command: \(error.localizedDescription)")
+            DWLogger.shared.log("Failed to run ps command: \(error.localizedDescription)", category: .monitor, level: .error)
             return []
         }
 
@@ -773,15 +880,9 @@ enum PSParser: Sendable {
 
             // Only track dev-related processes
             let cmd = parsed.command.lowercased()
-            let isDevProcess = cmd.contains("node") || cmd.contains("vitest") ||
-                cmd.contains("jest") || cmd.contains("tsc") || cmd.contains("tsgo") ||
-                cmd.contains("esbuild") || cmd.contains("next") || cmd.contains("webpack") ||
-                cmd.contains("turbo") || cmd.contains("eslint") || cmd.contains("prettier") ||
-                cmd.contains("mcp") || cmd.contains("pnpm") || cmd.contains("npm run") ||
-                cmd.contains("yarn") || cmd.contains("playwright") ||
-                cmd.contains("ms-playwright") || cmd.contains("percy") ||
-                cmd.contains("react-email") || cmd.contains("bun") ||
-                cmd.contains("deno") || cmd.contains("swc")
+            let isDevProcess = inclusionPatterns.contains { pattern in
+                cmd.contains(pattern.lowercased())
+            }
 
             guard isDevProcess else { continue }
 

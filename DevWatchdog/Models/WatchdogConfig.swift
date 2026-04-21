@@ -33,6 +33,9 @@ class WatchdogConfig: ObservableObject {
     @Published var excludedApps: [String] {
         didSet { saveExcludedApps() }
     }
+    @Published var inclusionPatterns: [String] {
+        didSet { saveInclusionPatterns() }
+    }
 
     // MARK: - Emergency Mode (issues #4 / #6)
 
@@ -57,6 +60,12 @@ class WatchdogConfig: ObservableObject {
     @Published var softKillPreferred: Bool {
         didSet { defaults.set(softKillPreferred, forKey: "softKillPreferred") }
     }
+
+    static let defaultInclusionPatterns = [
+        "node", "vitest", "jest", "tsc", "tsgo", "esbuild", "next", "webpack",
+        "turbo", "eslint", "prettier", "mcp", "pnpm", "npm run", "yarn",
+        "playwright", "ms-playwright", "percy", "react-email", "bun", "deno", "swc",
+    ]
 
     static let defaultExcludedApps = [
         "/Notion.app/", "/Slack.app/", "/Discord.app/",
@@ -104,6 +113,14 @@ class WatchdogConfig: ObservableObject {
         } else {
             self.excludedApps = Self.defaultExcludedApps
         }
+
+        // Load inclusion patterns
+        if let data = d.data(forKey: "inclusionPatterns"),
+           let decoded = try? JSONDecoder().decode([String].self, from: data) {
+            self.inclusionPatterns = decoded
+        } else {
+            self.inclusionPatterns = Self.defaultInclusionPatterns
+        }
     }
 
     func isWhitelisted(_ process: DevProcess) -> Bool {
@@ -126,6 +143,7 @@ class WatchdogConfig: ObservableObject {
         rules = ProcessRule.defaultRules
         soundOnCritical = true
         excludedApps = Self.defaultExcludedApps
+        inclusionPatterns = Self.defaultInclusionPatterns
         emergencyModeEnabled = true
         emergencyLoadFactor = 2.0
         elevatedLoadFactor = 1.0
@@ -136,6 +154,12 @@ class WatchdogConfig: ObservableObject {
     private func saveExcludedApps() {
         if let data = try? JSONEncoder().encode(excludedApps) {
             defaults.set(data, forKey: "excludedApps")
+        }
+    }
+
+    private func saveInclusionPatterns() {
+        if let data = try? JSONEncoder().encode(inclusionPatterns) {
+            defaults.set(data, forKey: "inclusionPatterns")
         }
     }
 

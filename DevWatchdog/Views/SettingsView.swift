@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var newRulePattern = ""
     @State private var showingResetConfirmation = false
     @State private var newExcludedApp = ""
+    @State private var newInclusionPattern = ""
 
     init(config: WatchdogConfig, monitor: ProcessMonitor? = nil) {
         self.config = config
@@ -161,6 +162,39 @@ struct SettingsView: View {
                         newExcludedApp = ""
                     }
                     .disabled(newExcludedApp.isEmpty)
+                }
+            }
+
+            Section("Dev Filter") {
+                Text("Only processes matching at least one of these keywords are tracked by DevWatchdog.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                ForEach(config.inclusionPatterns, id: \.self) { pattern in
+                    HStack {
+                        Text(pattern)
+                            .font(.system(.caption, design: .monospaced))
+                        Spacer()
+                        Button {
+                            config.inclusionPatterns.removeAll { $0 == pattern }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack {
+                    TextField("e.g. rollup", text: $newInclusionPattern)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+                    Button("Add") {
+                        guard !newInclusionPattern.isEmpty else { return }
+                        config.inclusionPatterns.append(newInclusionPattern)
+                        newInclusionPattern = ""
+                    }
+                    .disabled(newInclusionPattern.isEmpty)
                 }
             }
 

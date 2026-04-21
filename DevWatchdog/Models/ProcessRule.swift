@@ -18,6 +18,7 @@ struct ProcessRule: Identifiable, Codable, Hashable, Sendable {
     var action: RuleAction
     var isEnabled: Bool
     var onlyWhenOrphan: Bool
+    var matchMode: MatchMode
 
     init(
         id: UUID,
@@ -30,7 +31,8 @@ struct ProcessRule: Identifiable, Codable, Hashable, Sendable {
         thresholdMode: ThresholdMode = .any,
         action: RuleAction,
         isEnabled: Bool,
-        onlyWhenOrphan: Bool = false
+        onlyWhenOrphan: Bool = false,
+        matchMode: MatchMode = .substring
     ) {
         self.id = id
         self.pattern = pattern
@@ -43,6 +45,7 @@ struct ProcessRule: Identifiable, Codable, Hashable, Sendable {
         self.action = action
         self.isEnabled = isEnabled
         self.onlyWhenOrphan = onlyWhenOrphan
+        self.matchMode = matchMode
     }
 
     init(from decoder: Decoder) throws {
@@ -58,6 +61,22 @@ struct ProcessRule: Identifiable, Codable, Hashable, Sendable {
         action = try container.decode(RuleAction.self, forKey: .action)
         isEnabled = try container.decode(Bool.self, forKey: .isEnabled)
         onlyWhenOrphan = try container.decodeIfPresent(Bool.self, forKey: .onlyWhenOrphan) ?? false
+        matchMode = try container.decodeIfPresent(MatchMode.self, forKey: .matchMode) ?? .substring
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case pattern
+        case cpuThreshold
+        case runtimeThreshold
+        case maxRuntime
+        case maxCPUPercent
+        case maxRSSMB
+        case thresholdMode
+        case action
+        case isEnabled
+        case onlyWhenOrphan
+        case matchMode
     }
 
     enum RuleAction: String, Codable, CaseIterable, Sendable {
@@ -83,17 +102,69 @@ struct ProcessRule: Identifiable, Codable, Hashable, Sendable {
         }
     }
 
+    enum MatchMode: String, Codable, CaseIterable, Sendable {
+        case substring   // cmd.contains(pattern) — exactly like current default
+        case glob        // shell-style: * matches any chars, ? matches single char, anchored at both ends
+        case regex       // full NSRegularExpression (anchors and case handled inside pattern)
+
+        var displayName: String {
+            switch self {
+            case .substring: return "Substring"
+            case .glob:      return "Glob"
+            case .regex:     return "Regex"
+            }
+        }
+    }
+
     func matches(_ process: DevProcess) -> Bool {
         guard isEnabled else { return false }
         let cmd = process.command.lowercased()
         let pat = pattern.lowercased()
+        guard !pat.isEmpty else { return false }
 
-        // Support simple glob: "vitest.*forks" -> contains "vitest" and contains "forks"
-        let parts = pat.split(separator: "*").map(String.init)
-        if parts.count > 1 {
-            return parts.allSatisfy { cmd.contains($0.trimmingCharacters(in: .punctuationCharacters)) }
+        switch matchMode {
+        case .substring:
+            // Preserve legacy split-on-'*' behavior so existing rules and JSON continue to work.
+            // Patterns without '*' fall through to plain contains.
+            let parts = pat.split(separator: "*").map(String.init)
+            if parts.count > 1 {
+                return parts.allSatisfy { cmd.contains($0.trimmingCharacters(in: .punctuationCharacters)) }
+            }
+            return cmd.contains(pat)
+
+        case .glob:
+            return Self.globMatches(pattern: pat, input: cmd)
+
+        case .regex:
+            // For regex we preserve user's case semantics (pass options in regex)
+            return Self.regexMatches(pattern: pattern, input: process.command)
         }
-        return cmd.contains(pat)
+    }
+
+    private static func globMatches(pattern: String, input: String) -> Bool {
+        // Convert glob to regex: escape all regex metachars EXCEPT * and ?
+        // * → .*   ? → .   else: escape
+        var regex = "^"
+        for ch in pattern {
+            switch ch {
+            case "*": regex += ".*"
+            case "?": regex += "."
+            case ".", "+", "(", ")", "[", "]", "{", "}", "^", "$", "|", "\\":
+                regex += "\\\(ch)"
+            default:
+                regex.append(ch)
+            }
+        }
+        regex += "$"
+        return regexMatches(pattern: regex, input: input)
+    }
+
+    private static func regexMatches(pattern: String, input: String) -> Bool {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return false
+        }
+        let range = NSRange(input.startIndex..., in: input)
+        return re.firstMatch(in: input, options: [], range: range) != nil
     }
 
     /// Whether the warn thresholds are exceeded (CPU AND runtime).

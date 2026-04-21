@@ -1,6 +1,31 @@
 import Foundation
 import Combine
 
+// MARK: - Kill reason metadata (issue #24)
+
+/// Which automated rule or heuristic caused the kill.
+enum KillTrigger: String, Sendable, Hashable, Codable {
+    case maxRuntime
+    case maxCPUPercent
+    case maxRSSMB
+    case orphanTimeout
+    case catchAllMaxRuntime
+    case emergencyPromotion
+    case manual
+}
+
+/// Structured annotation attached to every auto-kill log entry.
+/// Carries enough information to reconstruct "why" a process was killed:
+/// which rule matched, which threshold fired, and what the observed value was.
+struct KillReason: Sendable, Hashable, Codable {
+    let ruleID: UUID?
+    let rulePattern: String?
+    let trigger: KillTrigger
+    let thresholdValue: Double
+    let actualValue: Double
+    let unit: String // "s" / "%" / "MB"
+}
+
 /// Single line item in the in-memory session log.
 ///
 /// Everything relevant to the UI row is captured here — timestamp,
@@ -13,6 +38,7 @@ struct SessionLogEntry: Identifiable, Sendable, Hashable {
     let message: String
     let pid: Int32?
     let processName: String?
+    let killReason: KillReason?
 
     enum Kind: String, Sendable, Hashable {
         case kill
@@ -30,7 +56,8 @@ struct SessionLogEntry: Identifiable, Sendable, Hashable {
         kind: Kind,
         message: String,
         pid: Int32? = nil,
-        processName: String? = nil
+        processName: String? = nil,
+        killReason: KillReason? = nil
     ) {
         self.id = id
         self.timestamp = timestamp
@@ -38,6 +65,7 @@ struct SessionLogEntry: Identifiable, Sendable, Hashable {
         self.message = message
         self.pid = pid
         self.processName = processName
+        self.killReason = killReason
     }
 }
 
@@ -72,14 +100,16 @@ final class SessionLog: ObservableObject {
         _ kind: SessionLogEntry.Kind,
         _ message: String,
         pid: Int32? = nil,
-        processName: String? = nil
+        processName: String? = nil,
+        killReason: KillReason? = nil
     ) {
         append(
             SessionLogEntry(
                 kind: kind,
                 message: message,
                 pid: pid,
-                processName: processName
+                processName: processName,
+                killReason: killReason
             )
         )
     }

@@ -42,6 +42,19 @@ struct DevWatchdogApp: App {
                     guard !hasStarted else { return }
                     hasStarted = true
 
+                    DWLogger.shared.bootstrap(
+                        appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
+                        buildNumber: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0",
+                        osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+                        ncpu: ProcessInfo.processInfo.activeProcessorCount,
+                        configSnapshot: [
+                            "scanInterval": String(config.scanInterval),
+                            "emergencyMode": String(config.emergencyModeEnabled),
+                            "orphanTimeout": String(config.orphanTimeout),
+                            "gracePeriod": String(config.gracePeriod),
+                        ]
+                    )
+
                     processMonitor.start(config: config)
 
                     // Register the global panic hotkey (⌘⇧⌥P).

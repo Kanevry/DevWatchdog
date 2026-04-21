@@ -30,7 +30,8 @@ final class ProcessRuleTests: XCTestCase {
         runtimeThreshold: TimeInterval = 600,
         maxRuntime: TimeInterval = 1200,
         action: ProcessRule.RuleAction = .warn,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        matchMode: ProcessRule.MatchMode = .substring
     ) -> ProcessRule {
         ProcessRule(
             id: UUID(),
@@ -39,7 +40,8 @@ final class ProcessRuleTests: XCTestCase {
             runtimeThreshold: runtimeThreshold,
             maxRuntime: maxRuntime,
             action: action,
-            isEnabled: isEnabled
+            isEnabled: isEnabled,
+            matchMode: matchMode
         )
     }
 
@@ -173,5 +175,79 @@ final class ProcessRuleTests: XCTestCase {
         let bunRule = makeRule(pattern: "BUN")
         let process = makeProcess(command: "/usr/local/bin/bun run dev")
         XCTAssertTrue(bunRule.matches(process), "Rule matching should be case-insensitive")
+    }
+
+    // MARK: - MatchMode: substring (default, existing behavior)
+
+    func testSubstringModeMatchesSubstring() throws {
+        let rule = makeRule(pattern: "node", matchMode: .substring)
+        XCTAssertTrue(rule.matches(makeProcess(command: "/usr/local/bin/node script.js")))
+        XCTAssertTrue(rule.matches(makeProcess(command: "/usr/local/bin/node-exporter")))
+        // substring matches both — that's the expected "loose" behavior
+    }
+
+    // MARK: - MatchMode: glob (anchored)
+
+    func testGlobModeAnchoredExactly() throws {
+        let exactRule = makeRule(pattern: "node", matchMode: .glob)
+        XCTAssertFalse(exactRule.matches(makeProcess(command: "/usr/local/bin/node")))  // no wildcards → exact lowercase match
+        XCTAssertTrue(exactRule.matches(makeProcess(command: "node")))
+    }
+
+    func testGlobModeWildcards() throws {
+        let rule = makeRule(pattern: "*vitest*forks*", matchMode: .glob)
+        XCTAssertTrue(rule.matches(makeProcess(command: "/usr/bin/node /path/vitest --forks --worker")))
+        XCTAssertFalse(rule.matches(makeProcess(command: "vitest")))  // needs 'forks'
+    }
+
+    func testGlobModeDoesNotMatchSubstringBoundary() throws {
+        // "node" in glob mode must NOT match "node-exporter"
+        let rule = makeRule(pattern: "node*", matchMode: .glob)
+        XCTAssertTrue(rule.matches(makeProcess(command: "node-exporter")))
+        XCTAssertTrue(rule.matches(makeProcess(command: "node")))
+
+        let strict = makeRule(pattern: "node", matchMode: .glob)
+        XCTAssertFalse(strict.matches(makeProcess(command: "node-exporter")))
+    }
+
+    func testGlobModeEscapesRegexMeta() throws {
+        // pattern "foo.bar" in glob should only match literal "foo.bar", not "fooxbar"
+        let rule = makeRule(pattern: "foo.bar", matchMode: .glob)
+        XCTAssertTrue(rule.matches(makeProcess(command: "foo.bar")))
+        XCTAssertFalse(rule.matches(makeProcess(command: "fooxbar")))
+    }
+
+    // MARK: - MatchMode: regex
+
+    func testRegexModeWithAnchors() throws {
+        let rule = makeRule(pattern: "^node$", matchMode: .regex)
+        XCTAssertTrue(rule.matches(makeProcess(command: "node")))
+        XCTAssertFalse(rule.matches(makeProcess(command: "node-exporter")))
+    }
+
+    func testRegexModeUnanchored() throws {
+        let rule = makeRule(pattern: "(vitest|jest)", matchMode: .regex)
+        XCTAssertTrue(rule.matches(makeProcess(command: "/path/to/vitest --forks")))
+        XCTAssertTrue(rule.matches(makeProcess(command: "/path/to/jest --worker")))
+        XCTAssertFalse(rule.matches(makeProcess(command: "/path/to/mocha")))
+    }
+
+    func testRegexModeInvalidPatternReturnsFalse() throws {
+        let rule = makeRule(pattern: "[unclosed", matchMode: .regex)
+        XCTAssertFalse(rule.matches(makeProcess(command: "anything")))
+    }
+
+    func testDisabledRuleDoesNotMatchInAnyMode() throws {
+        for mode in ProcessRule.MatchMode.allCases {
+            let rule = makeRule(pattern: ".*", isEnabled: false, matchMode: mode)
+            XCTAssertFalse(rule.matches(makeProcess(command: "anything")))
+        }
+    }
+
+    func testEmptyPatternDoesNotMatch() throws {
+        for mode in ProcessRule.MatchMode.allCases {
+            let rule = makeRule(pattern: "", matchMode: mode)
+            XCTAssertFalse(rule.matches(makeProcess(command: "anything")))
+        }
     }
 }
