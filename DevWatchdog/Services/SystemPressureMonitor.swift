@@ -3,6 +3,48 @@ import Combine
 import Darwin
 import Dispatch
 
+// MARK: - Sendable wrappers
+
+/// Thin `@unchecked Sendable` wrapper around `CurrentValueSubject`.
+///
+/// Safety rationale: `CurrentValueSubject` protects its state with an internal
+/// lock (`os_unfair_lock`). Mutating `value` and sending values through the
+/// subject are therefore thread-safe. The wrapper does not add any unsynchronised
+/// mutable state. `@unchecked Sendable` is the standard pattern for bridging
+/// pre-concurrency Combine types that are known to be thread-safe but whose
+/// `Sendable` conformance was not declared in the SDK (Xcode 16.2 / Swift 6.0).
+final class SendableCurrentValueSubject<Output: Sendable, Failure: Error>: @unchecked Sendable {
+    private let inner: CurrentValueSubject<Output, Failure>
+
+    init(_ value: Output) {
+        self.inner = CurrentValueSubject(value)
+    }
+
+    var value: Output { inner.value }
+
+    func send(_ value: Output) { inner.send(value) }
+
+    func eraseToAnyPublisher() -> AnyPublisher<Output, Failure> {
+        inner.eraseToAnyPublisher()
+    }
+}
+
+/// Thin `@unchecked Sendable` wrapper around `any DispatchSourceMemoryPressure`.
+///
+/// Safety rationale: `DispatchSource` objects are thread-safe by design — all
+/// GCD source operations are internally serialised. The protocol
+/// `DispatchSourceMemoryPressure` is not declared `Sendable` in the Xcode 16.2
+/// SDK, which causes a strict-concurrency error when the source is captured in a
+/// `@Sendable` closure. Wrapping it suppresses that error without any change in
+/// runtime behaviour.
+final class SendableDispatchSource: @unchecked Sendable {
+    let inner: any DispatchSourceMemoryPressure
+
+    init(_ source: any DispatchSourceMemoryPressure) {
+        self.inner = source
+    }
+}
+
 // MARK: - Protocol
 
 /// A source of ``SystemPressureSnapshot`` values.
@@ -191,10 +233,9 @@ final class SystemPressureMonitor: ObservableObject, SystemPressureSource {
 
     // MARK: Internals
     /// Accessible from any actor so `snapshotPublisher` / `currentSnapshot` can
-    /// satisfy the `nonisolated` protocol requirements. `CurrentValueSubject`
-    /// is internally thread-safe but not formally `Sendable` in Combine's
-    /// public headers — we vouch for it with `nonisolated(unsafe)`.
-    nonisolated(unsafe) private let subject: CurrentValueSubject<SystemPressureSnapshot, Never>
+    /// satisfy the `nonisolated` protocol requirements. `SendableCurrentValueSubject`
+    /// is `@unchecked Sendable` — see its declaration for the safety rationale.
+    private let subject: SendableCurrentValueSubject<SystemPressureSnapshot, Never>
     private var memoryPressureSource: DispatchSourceMemoryPressure?
     private var pollTimer: DispatchSourceTimer?
     private let pollQueue: DispatchQueue
@@ -224,7 +265,7 @@ final class SystemPressureMonitor: ObservableObject, SystemPressureSource {
             timestamp: Date()
         )
         self.snapshot = initial
-        self.subject = CurrentValueSubject(initial)
+        self.subject = SendableCurrentValueSubject(initial)
         self.pollQueue = DispatchQueue(label: "at.kanevry.DevWatchdog.SystemPressureMonitor", qos: .utility)
     }
 
@@ -283,8 +324,13 @@ final class SystemPressureMonitor: ObservableObject, SystemPressureSource {
         // Capture a weak reference outside the @MainActor function body so the
         // returned closure is a plain nonisolated @Sendable — no inherited
         // isolation, no runtime executor check.
-        return { [weak owner, source] in
-            let data = source.data
+        // Wrap `source` in a Sendable box so the closure doesn't capture a
+        // non-Sendable `any DispatchSourceMemoryPressure` directly (Swift 6.0
+        // strict concurrency rejects that; see SendableDispatchSource for
+        // safety rationale).
+        let sendableSource = SendableDispatchSource(source)
+        return { [weak owner, sendableSource] in
+            let data = sendableSource.inner.data
             let level: PressureLevel
             if data.contains(.critical) {
                 level = .critical

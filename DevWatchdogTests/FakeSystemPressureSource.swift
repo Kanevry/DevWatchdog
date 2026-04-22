@@ -8,7 +8,7 @@ import Combine
 final class FakeSystemPressureSource: SystemPressureSource, ObservableObject {
     @Published var snapshot: SystemPressureSnapshot
 
-    nonisolated(unsafe) private let subject: CurrentValueSubject<SystemPressureSnapshot, Never>
+    private let subject: SendableCurrentValueSubject<SystemPressureSnapshot, Never>
 
     private(set) var startCount = 0
     private(set) var stopCount = 0
@@ -23,7 +23,7 @@ final class FakeSystemPressureSource: SystemPressureSource, ObservableObject {
         timestamp: Date()
     )) {
         self.snapshot = initial
-        self.subject = CurrentValueSubject(initial)
+        self.subject = SendableCurrentValueSubject(initial)
     }
 
     // MARK: - SystemPressureSource
