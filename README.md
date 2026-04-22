@@ -68,6 +68,13 @@ When system load spikes above your configured threshold, DevWatchdog enters **Em
 - Exits automatically when load returns to normal
 - Fully observable: every Emergency-triggered kill is tagged with its `KillTrigger`/`KillReason` in the session log
 
+### What's New in v3.3
+
+- **cwd-based project detection (G2, opt-in)** — resolves the working directory via `proc_pidinfo` and walks up to the nearest project root (`.git`, `package.json`, `Cargo.toml`, …), so processes inside monorepos get the correct project name instead of a parent-folder name. Enable under Settings → Entwickler → „cwd-Projekterkennung".
+- **Signal-based dev classifier (G1, opt-in)** — four orthogonal heuristics (executable path, cwd, parent process, bundle identifier) replace word-list first-classification; hard exclusions for non-dev bundles (Slack, Notion, browsers) are overridden by a dev allowlist (VSCode, Cursor, iTerm2, Terminal, Warp). Enable under Settings → Entwickler → „Signal-Klassifier".
+- **UI polish** — context-sensitive empty state copy, secondary panic button, pause/resume for process groups, correct Swap/Compressor row rendering, CPU colour scale relative to core count, unified German labels throughout.
+- **Popover reliability fix** — LSUIElement apps must call `NSApp.activate` before showing a popover; fixes SwiftUI buttons not firing and transient dismissal not working (regression since v3.2).
+
 ### Observability (v3.1)
 
 - **Insights tab** — weekly summary of what was killed, why, which projects/process types dominate, and how many CPU/RSS hours you reclaimed

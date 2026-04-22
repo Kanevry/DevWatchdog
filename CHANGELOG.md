@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-04-22
+
 ### Added
 
 - **cwd-basierte Projekterkennung (G2)** — hinter neuem Feature-Flag
@@ -32,9 +34,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - 46 neue Unit-/Integrationstests (`ProcPIDInfoCwdTests`,
   `ProjectRootResolverTests`, `DevProcessClassifierTests`,
   `LibProcSignalClassifierTests`). Test-Baseline 335 → 381.
+- **libproc-basierter Prozess-Enumerator (opt-in, Feature-Flag)** — neuer
+  `LibProcProcessEnumerator` nutzt `proc_listpids` + `proc_pidinfo` direkt
+  und ersetzt den `/bin/ps`-Subprocess-Pfad, wenn `useLibprocEnumerator`
+  unter Einstellungen → Entwickler aktiviert ist. Default `false`; gleiche
+  `DevProcess`-Ausgabe wie `PSParser`; identische Filter-Semantik
+  (Inclusion-Patterns, Excluded-Apps, Playwright-Ausnahme,
+  `/Applications/`-Heuristik). Scan-Dauer wird auf beiden Backends für
+  Vorher/Nachher-Vergleich geloggt. Bekannte MVP-Divergenzen:
+  `command` ist nur Exec-Pfad (nicht volles argv); CPU% ist kumulativ seit
+  Start (Delta-Sampling deferred). Closes GitLab #34 (G5).
 
 ### Fixed
 
+- **GitHub-Actions-CI grün auf Xcode 16.2 / Swift 6.0 strict concurrency** — drei
+  `non-sendable type`-Fehler in `SystemPressureMonitor.swift` wurden durch zwei
+  neue `@unchecked Sendable`-Wrapper beseitigt: `SendableCurrentValueSubject`
+  kapselt Combines `CurrentValueSubject` (nicht formal `Sendable` in 6.0) und
+  `SendableDispatchSource` kapselt `any DispatchSourceMemoryPressure` für den
+  `@Sendable`-Handler-Closure. Lokal unter Xcode 26 / Swift 6.2 unverändert grün;
+  CI-Runner zieht jetzt auf Xcode 16.4 (war 16.2) für konsistente Swift-6.0-GA-Baseline.
 - **Popover bleibt offen, Buttons reagieren nicht** (Regression seit v3.2.0,
   `NSStatusItem`-Umbau). LSUIElement-App braucht explizites
   `NSApp.activate(ignoringOtherApps: true)` bevor das Popover gezeigt wird —
@@ -72,18 +91,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **CPU-Farbskala skaliert jetzt mit `ncpu`** — 100 % CPU auf einer 12-Kern-
   Maschine ist keine Warnfarbe mehr wert; rot ab ≥ 15 % Gesamt-Kapazität,
   orange ab ≥ 5 %. Gilt für Einzel- und Gruppenzeilen. Closes #46.
+- **CI-Infrastruktur modernisiert** — `.github/workflows/build.yml` pinnt jetzt
+  Xcode 16.4 (letzte Stable-16-Serie mit Swift-6.0-GA-Korrekturen) und unterstützt
+  manuelles `workflow_dispatch`. Neuer Release-Workflow (`release.yml`) triggert
+  auf `v*`-Tags, baut Release-Konfiguration, packt `.app` via `ditto` als ZIP
+  und erstellt GitHub Release mit CHANGELOG-Auszug + `--generate-notes`.
+  `.gitlab-ci.yml` spiegelt Build+Release. Beide Workflows mit minimalen Token-
+  Scopes (`contents: read` für Build, `contents: write` für Release) und
+  env-var-Indirection für user-supplied Tag-Inputs (Injection-Schutz).
 
-### Added
+### Security
 
-- **libproc-based process enumerator (opt-in, feature-flagged)** — new
-  `LibProcProcessEnumerator` using `proc_listpids` + `proc_pidinfo` directly,
-  replacing the `/bin/ps` subprocess path when `useLibprocEnumerator` is
-  enabled in Settings → Entwickler. Defaults `false`; same `DevProcess` output
-  shape as `PSParser`; same filter semantics (inclusion patterns, excluded
-  apps, Playwright exemption, `/Applications/` heuristic). Scan duration is
-  now logged on both backends for before/after timing comparison. Known MVP
-  divergences: `command` is exec-path only (not full argv); CPU% is cumulative
-  since start (delta-sampling deferred). Closes GitLab #34 (G5).
+- **Release-Workflow-Härtung** — `${{ inputs.tag }}` (workflow_dispatch) wird
+  jetzt über `env:` in Shell-Variablen gemappt, nie direkt in `run:`-Blöcke
+  inline-interpoliert. Gleiches Pattern für alle `${{ steps.*.outputs.* }}`-
+  Referenzen. Zusätzliche Tag-Format-Validierung (`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+  verhindert freie-Text-Injection. `build.yml` bekommt explizites
+  `permissions: contents: read` (minimal-privilege).
 
 ## [3.2.0] — 2026-04-21
 
