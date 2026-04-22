@@ -6,17 +6,20 @@
 stages:
   - build
   - test
+  - release
 
 variables:
   SCHEME: DevWatchdog
   PROJECT: DevWatchdog.xcodeproj
   DESTINATION: "platform=macOS"
+  XCODE_APP: "/Applications/Xcode_16.4.app"
 
 build:
   tags:
     - macbook-swift
   stage: build
   before_script:
+    - sudo xcode-select -s ${XCODE_APP}
     - xcodebuild -version
   script:
     - xcodebuild
@@ -41,6 +44,9 @@ test:
   tags:
     - macbook-swift
   stage: test
+  before_script:
+    - sudo xcode-select -s ${XCODE_APP}
+    - xcodebuild -version
   script:
     - xcodebuild
         -project ${PROJECT}
@@ -55,3 +61,51 @@ test:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "web"
+
+release:
+  tags:
+    - macbook-swift
+  stage: release
+  before_script:
+    - sudo xcode-select -s ${XCODE_APP}
+    - xcodebuild -version
+    - command -v glab >/dev/null 2>&1 || { echo "glab not installed on runner"; exit 1; }
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - echo "Releasing v${VERSION}"
+    # Build Release config
+    - xcodebuild
+        -project ${PROJECT}
+        -scheme ${SCHEME}
+        -configuration Release
+        -derivedDataPath build
+        -destination "${DESTINATION}"
+        CODE_SIGN_IDENTITY=""
+        CODE_SIGNING_REQUIRED=NO
+        build
+    # Package .app as ZIP (ditto preserves bundle metadata)
+    - ditto -c -k --sequesterRsrc --keepParent
+        "build/Build/Products/Release/DevWatchdog.app"
+        "DevWatchdog-${VERSION}.zip"
+    - shasum -a 256 "DevWatchdog-${VERSION}.zip"
+    # Extract CHANGELOG section for release notes
+    - |
+      awk -v ver="${VERSION}" '
+        $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+        flag && /^## \[/ { exit }
+        flag { print }
+      ' CHANGELOG.md > RELEASE_NOTES.md
+      if [ ! -s RELEASE_NOTES.md ]; then
+        echo "Release ${VERSION}" > RELEASE_NOTES.md
+      fi
+    # Create GitLab Release and upload binary (glab is auth'd on runner)
+    - glab release create "${CI_COMMIT_TAG}"
+        --name "DevWatchdog ${CI_COMMIT_TAG}"
+        --notes-file RELEASE_NOTES.md
+    - glab release upload "${CI_COMMIT_TAG}" "DevWatchdog-${VERSION}.zip"
+  artifacts:
+    paths:
+      - "DevWatchdog-*.zip"
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
