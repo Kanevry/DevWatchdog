@@ -136,10 +136,15 @@ final class ProjectRootResolverTests: XCTestCase {
 
     // MARK: - 7. Real-repo regression guard
 
-    func test_projectName_devwatchdogRepo_returnsDevWatchdog() {
+    func test_projectName_devwatchdogRepo_returnsDevWatchdog() throws {
         // The DevWatchdog repo contains a .git directory at its root.
         // This is the canonical regression guard from GitLab #35 G2.
         let repoPath = "/Users/bernhardgoetzendorfer/Projects/Archiv/DevWatchdog"
+        // Hardcoded developer path — skip on CI runners and other machines
+        // where this path does not exist. Local dev gets full regression coverage.
+        guard FileManager.default.fileExists(atPath: repoPath) else {
+            throw XCTSkip("regression guard path '\(repoPath)' not present — CI or non-dev environment")
+        }
         let result = ProjectRootResolver.projectName(for: repoPath)
         XCTAssertEqual(result, "DevWatchdog",
             "real repo path must resolve to 'DevWatchdog', not 'Archiv' or nil")
