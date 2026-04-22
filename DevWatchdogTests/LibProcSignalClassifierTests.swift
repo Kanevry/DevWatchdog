@@ -22,6 +22,24 @@ final class LibProcSignalClassifierTests: XCTestCase {
         ProcessInfo.processInfo.processIdentifier
     }
 
+    /// Sandboxed CI runners (GitHub-hosted macos-15) return a restricted
+    /// `proc_listpids` view that omits the test runner's own PID. The signal
+    /// classifier tests all assume the runner is visible, so skip the whole
+    /// class in that environment. Local / self-hosted runs are unaffected.
+    override func setUpWithError() throws {
+        let probe = LibProcProcessEnumerator.parseProcessList(
+            excludedApps: [],
+            inclusionPatterns: selfMatchingPatterns
+        )
+        if !probe.map(\.id).contains(selfPID) {
+            throw XCTSkip(
+                "libproc enumeration did not return self PID — sandboxed environment " +
+                "(expected on GitHub-hosted CI runners). Signal-classifier features " +
+                "are behind disabled-default flags; tests pass on unrestricted hosts."
+            )
+        }
+    }
+
     // MARK: - 1. test_defaultFlags_behaviorUnchanged_preservesBaseline
 
     func test_defaultFlags_behaviorUnchanged_preservesBaseline() {
