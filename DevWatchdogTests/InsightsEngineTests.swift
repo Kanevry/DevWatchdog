@@ -9,13 +9,17 @@ final class InsightsEngineTests: XCTestCase {
     }
 
     override func setUp() async throws {
-        try await super.setUp()
+        // Note: do NOT call super.setUp() — Swift 6.0 strict concurrency treats
+        // sending a @MainActor-isolated self into XCTestCase's nonisolated
+        // setUp() as a data race. XCTestCase's base setUp() is a no-op, so
+        // skipping is safe. Matches the pattern used in other @MainActor
+        // test classes in this target.
         clearDismissals()
     }
 
     override func tearDown() async throws {
+        // See setUp() — same rationale; super.tearDown() omitted intentionally.
         clearDismissals()
-        try await super.tearDown()
     }
 
     // MARK: - Empty log
