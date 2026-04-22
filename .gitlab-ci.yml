@@ -12,14 +12,16 @@ variables:
   SCHEME: DevWatchdog
   PROJECT: DevWatchdog.xcodeproj
   DESTINATION: "platform=macOS"
-  XCODE_APP: "/Applications/Xcode_16.4.app"
+  # Set Xcode without sudo — DEVELOPER_DIR is honoured by xcodebuild, unlike
+  # `xcode-select -s` which requires root. The self-hosted runner has no
+  # passwordless sudo configured.
+  DEVELOPER_DIR: "/Applications/Xcode_16.4.app/Contents/Developer"
 
 build:
   tags:
     - macbook-swift
   stage: build
   before_script:
-    - sudo xcode-select -s ${XCODE_APP}
     - xcodebuild -version
   script:
     - xcodebuild
@@ -45,7 +47,6 @@ test:
     - macbook-swift
   stage: test
   before_script:
-    - sudo xcode-select -s ${XCODE_APP}
     - xcodebuild -version
   script:
     - xcodebuild
@@ -67,7 +68,6 @@ release:
     - macbook-swift
   stage: release
   before_script:
-    - sudo xcode-select -s ${XCODE_APP}
     - xcodebuild -version
     - command -v glab >/dev/null 2>&1 || { echo "glab not installed on runner"; exit 1; }
   script:
