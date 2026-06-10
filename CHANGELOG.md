@@ -226,7 +226,7 @@ filter by path, log export, and richer rule match modes.
   right-click → Open or `xattr -d com.apple.quarantine` on first launch.
 - DMG artifact (`DevWatchdog-3.1.0.dmg`) shipped as a GitHub Release asset.
 
-Closes GitLab epic [#21](https://gitlab.gotzendorfer.at/mobile/DevWatchdog/-/issues/21)
+Closes internal tracking epic #21
 and sub-issues #22–#32 (minus #25, deferred).
 
 ---
